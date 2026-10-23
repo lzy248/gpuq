@@ -113,10 +113,18 @@ README languages.
 ```bash
 git clone https://github.com/lzy248/gpuq.git
 cd gpuq
+export PATH="$(python -m site --user-base)/bin:$PATH"
 python -m pip install --user -e .
 gpuq init
 gpuq doctor
 ```
+
+The `PATH` setting lets your shell find the user-installed `gpuq` and `gpuqd`
+commands. Setting it before installation also avoids pip's warning that the scripts
+directory is not on `PATH`. It applies only to the current shell and its child
+processes. For future terminals, add the same `export` line to your shell's startup
+file (for example, `~/.bashrc` for interactive Bash shells), then open a new terminal
+or reload that file.
 
 ## Quick start
 

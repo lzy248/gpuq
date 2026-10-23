@@ -106,10 +106,16 @@ Release 压缩包还包含示例配置、systemd unit、许可证和中英文 RE
 ```bash
 git clone https://github.com/lzy248/gpuq.git
 cd gpuq
+export PATH="$(python -m site --user-base)/bin:$PATH"
 python -m pip install --user -e .
 gpuq init
 gpuq doctor
 ```
+
+这行 `PATH` 设置让 Shell 能找到用户级安装的 `gpuq` 和 `gpuqd` 命令；放在安装前，
+也能避免 pip 提示脚本目录不在 `PATH` 中。它只对当前终端及其子进程生效。
+若希望新终端也能直接使用这些命令，可将同一行 `export` 添加到所用 Shell 的启动
+文件中（例如交互式 Bash 的 `~/.bashrc`），然后打开新终端或重新加载该文件。
 
 ## 快速开始
 
