@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     cwd TEXT NOT NULL,
     env_json TEXT NOT NULL DEFAULT '{}',
     gpu_allowlist_json TEXT,
+    gpu_count INTEGER NOT NULL DEFAULT 1 CHECK(gpu_count > 0),
+    assigned_gpus_json TEXT,
+    launch_free_memory_by_gpu_json TEXT,
     memory_mb INTEGER NOT NULL CHECK(memory_mb > 0),
     memory_mode TEXT NOT NULL DEFAULT 'fixed' CHECK(memory_mode IN ('fixed', 'auto')),
     reserve_mb INTEGER NOT NULL CHECK(reserve_mb >= 0),
@@ -82,6 +85,9 @@ class QueueDB:
                 for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
             }
             migrations = {
+                "gpu_count": "INTEGER NOT NULL DEFAULT 1",
+                "assigned_gpus_json": "TEXT",
+                "launch_free_memory_by_gpu_json": "TEXT",
                 "memory_mode": "TEXT NOT NULL DEFAULT 'fixed'",
                 "oom_count": "INTEGER NOT NULL DEFAULT 0",
                 "launch_free_memory_mb": "INTEGER",
@@ -117,6 +123,18 @@ class QueueDB:
             cwd=str(row["cwd"]),
             env=dict(json.loads(row["env_json"])),
             gpu_allowlist=tuple(int(value) for value in allowlist) if allowlist else None,
+            gpu_count=int(row["gpu_count"]),
+            assigned_gpus=(
+                tuple(json.loads(row["assigned_gpus_json"]))
+                if row["assigned_gpus_json"]
+                else ((int(row["assigned_gpu"]),) if row["assigned_gpu"] is not None else ())
+            ),
+            launch_free_memory_by_gpu={
+                int(key): int(value)
+                for key, value in json.loads(
+                    row["launch_free_memory_by_gpu_json"] or "{}"
+                ).items()
+            },
             memory_mb=int(row["memory_mb"]),
             memory_mode=str(row["memory_mode"]),
             reserve_mb=int(row["reserve_mb"]),
@@ -182,6 +200,7 @@ class QueueDB:
         log_path: str,
         notify: bool,
         memory_mode: str = "fixed",
+        gpu_count: int = 1,
     ) -> Job:
         if not command:
             raise ValueError("command cannot be empty")
@@ -189,6 +208,14 @@ class QueueDB:
             raise ValueError("invalid resource or retry value")
         if memory_mode not in {"fixed", "auto"}:
             raise ValueError("memory_mode must be fixed or auto")
+        if isinstance(gpu_count, bool) or not isinstance(gpu_count, int) or gpu_count < 1:
+            raise ValueError("gpu_count must be a positive integer")
+        if gpu_allowlist is not None:
+            gpu_allowlist = tuple(dict.fromkeys(gpu_allowlist))
+            if any(index < 0 for index in gpu_allowlist):
+                raise ValueError("GPU indices cannot be negative")
+            if len(gpu_allowlist) < gpu_count:
+                raise ValueError("gpu_count exceeds the number of distinct allowed GPUs")
         if max_utilization is not None and not 0 <= max_utilization <= 100:
             raise ValueError("max_utilization must be in [0, 100]")
         now = utcnow()
@@ -205,8 +232,8 @@ class QueueDB:
                     name, command_json, cwd, env_json, gpu_allowlist_json,
                     memory_mb, memory_mode, reserve_mb, max_utilization, stable_samples,
                     priority, status, exclusive, dependency_id, max_retries,
-                    retry_on_oom, log_path, notify, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retry_on_oom, log_path, notify, created_at, updated_at, gpu_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -229,6 +256,7 @@ class QueueDB:
                     int(notify),
                     now,
                     now,
+                    gpu_count,
                 ),
             )
             job_id = int(cursor.lastrowid)
@@ -321,14 +349,30 @@ class QueueDB:
         *,
         launch_free_memory_mb: int | None = None,
         launch_total_memory_mb: int | None = None,
+        gpu_indices: Sequence[int] | None = None,
+        launch_free_memory_by_gpu: dict[int, int] | None = None,
     ) -> bool:
+        indices = tuple(gpu_indices) if gpu_indices is not None else (gpu_index,)
+        if not indices or indices[0] != gpu_index or len(set(indices)) != len(indices):
+            raise ValueError("assigned GPUs must be distinct and start with gpu_index")
+        if any(index < 0 for index in indices):
+            raise ValueError("GPU indices cannot be negative")
         with self.transaction(immediate=True) as connection:
+            row = connection.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if row is None:
+                return False
+            job = self._job(row)
+            if len(indices) != job.gpu_count:
+                raise ValueError("assigned GPU count does not match requested gpu_count")
+            if job.gpu_allowlist is not None and not set(indices) <= set(job.gpu_allowlist):
+                raise ValueError("assigned GPU is outside the allowlist")
             cursor = connection.execute(
                 """
                 UPDATE jobs SET status=?, assigned_gpu=?, attempt=attempt+1,
                     updated_at=?, started_at=COALESCE(started_at, ?), error=NULL,
                     failure_kind=NULL, cancel_requested=0,
-                    launch_free_memory_mb=?, launch_total_memory_mb=?
+                    launch_free_memory_mb=?, launch_total_memory_mb=?,
+                    assigned_gpus_json=?, launch_free_memory_by_gpu_json=?
                 WHERE id=? AND status IN (?, ?, ?)
                 """,
                 (
@@ -338,6 +382,8 @@ class QueueDB:
                     utcnow(),
                     launch_free_memory_mb,
                     launch_total_memory_mb,
+                    json.dumps(indices),
+                    json.dumps(launch_free_memory_by_gpu or {}),
                     job_id,
                     JobStatus.QUEUED.value,
                     JobStatus.WAITING_MEMORY.value,
@@ -423,7 +469,8 @@ class QueueDB:
             cursor = connection.execute(
                 """
                 UPDATE jobs SET status=?, exit_code=NULL, error=?, failure_kind=?,
-                    finished_at=?, updated_at=?, assigned_gpu=NULL, pid=NULL,
+                    finished_at=?, updated_at=?, assigned_gpu=NULL, assigned_gpus_json=NULL,
+                    launch_free_memory_by_gpu_json=NULL, pid=NULL,
                     pgid=NULL, worker_pid=NULL
                 WHERE id=? AND status IN (?, ?)
                 """,
@@ -452,7 +499,8 @@ class QueueDB:
             connection.execute(
                 """
                 UPDATE jobs SET status=?, memory_mb=?, error=?, failure_kind='oom',
-                    assigned_gpu=NULL, pid=NULL, pgid=NULL, worker_pid=NULL,
+                    assigned_gpu=NULL, assigned_gpus_json=NULL,
+                    launch_free_memory_by_gpu_json=NULL, pid=NULL, pgid=NULL, worker_pid=NULL,
                     exit_code=NULL, cancel_requested=0, oom_count=oom_count+1,
                     last_oom_requested_mb=?, updated_at=? WHERE id=?
                 """,
@@ -479,12 +527,14 @@ class QueueDB:
                 """
                 UPDATE jobs SET status=?, exit_code=NULL,
                     error=?, failure_kind='oom_exceeds_device', finished_at=?, updated_at=?,
-                    assigned_gpu=NULL, pid=NULL, pgid=NULL, worker_pid=NULL
+                    assigned_gpu=NULL, assigned_gpus_json=NULL,
+                    launch_free_memory_by_gpu_json=NULL, pid=NULL, pgid=NULL, worker_pid=NULL
                 WHERE id=? AND status IN (?, ?, ?)
                 """,
                 (
                     JobStatus.FAILED.value,
-                    f"learned required free memory {required_mb}MB exceeds maximum eligible GPU memory {maximum_mb}MB",
+                    f"learned required free memory {required_mb}MB per GPU exceeds "
+                    f"available group capacity {maximum_mb}MB per GPU",
                     now,
                     now,
                     job_id,
@@ -543,7 +593,8 @@ class QueueDB:
             reset_learning = memory_mode is not None
             connection.execute(
                 """
-                UPDATE jobs SET status=?, memory_mb=?, memory_mode=?, assigned_gpu=NULL, pid=NULL,
+                UPDATE jobs SET status=?, memory_mb=?, memory_mode=?, assigned_gpu=NULL, assigned_gpus_json=NULL,
+                    launch_free_memory_by_gpu_json=NULL, pid=NULL,
                     pgid=NULL, worker_pid=NULL, exit_code=NULL, cancel_requested=0,
                     error=NULL, failure_kind=NULL, finished_at=NULL,
                     retry_on_oom=CASE WHEN ?='auto' THEN 1 ELSE retry_on_oom END,

@@ -21,7 +21,8 @@ def requeue_orphan(db: QueueDB, job_id: int, limit: int) -> bool:
         if count >= limit:
             return False
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        conn.execute("""UPDATE jobs SET status='queued', assigned_gpu=NULL,
+        conn.execute("""UPDATE jobs SET status='queued', assigned_gpu=NULL, assigned_gpus_json=NULL,
+            launch_free_memory_by_gpu_json=NULL,
             pid=NULL, pgid=NULL, worker_pid=NULL, exit_code=NULL, finished_at=NULL,
             started_at=NULL, error=NULL, failure_kind=NULL, updated_at=? WHERE id=?""",
             (now, job_id))

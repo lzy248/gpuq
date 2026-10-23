@@ -110,18 +110,19 @@ def execute_job(db: QueueDB, job_id: int, *, state_dir: Path) -> int:
         job = db.get(job_id)
     if job.status != JobStatus.RUNNING.value:
         raise RuntimeError(f"job {job_id} was not marked running")
-    if job.assigned_gpu is None:
-        raise RuntimeError("running job has no assigned GPU")
+    if len(job.assigned_gpus) != job.gpu_count:
+        raise RuntimeError("running job does not have all requested GPUs assigned")
 
     log_path = Path(job.log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
     environment.update(job.env)
-    environment["CUDA_VISIBLE_DEVICES"] = str(job.assigned_gpu)
+    visible_devices = ",".join(map(str, job.assigned_gpus))
+    environment["CUDA_VISIBLE_DEVICES"] = visible_devices
     with log_path.open("a", encoding="utf-8", buffering=1) as log:
         log.write(
             f"\n[gpuq {utcnow()}] job={job.id} attempt={job.attempt} "
-            f"physical_gpu={job.assigned_gpu} command={list(job.command)!r}\n"
+            f"physical_gpu={visible_devices} command={list(job.command)!r}\n"
         )
         try:
             child = subprocess.Popen(

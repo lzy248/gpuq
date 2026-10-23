@@ -59,7 +59,7 @@ priority DESC, job_id ASC
 持续到达，高显存任务可能等待较久。需要严格防饥饿时，应暂停提交小任务，
 限制它们的 GPU allowlist，或临时使用 `--exclusive` 配合空卡窗口。
 
-同一任务可在多张卡运行时，选择：
+单卡任务有多个候选 GPU 时，选择：
 
 ```text
 argmin(utilization, free_memory - required_memory, gpu_index)
@@ -71,6 +71,18 @@ argmin(utilization, free_memory - required_memory, gpu_index)
 
 `GPU-Util` 是 `nvidia-smi` 给出的瞬时设备利用率，不等价于长期平均负载；连续
 稳定采样主要用于确认资源条件持续成立，最终排序使用最近一次采样值。
+
+### 单机多卡任务
+
+`--gpus N` 按相同排序选取 N 张不同且已通过稳定采样的卡。每张卡独立满足显存、
+安全余量、利用率和独占条件。启动前第二次采样重新检查全部 N 张卡，全部通过后
+在同一次 SQLite 领取操作中记录完整分配；任何一张不满足时都不领取。每张已分配卡
+分别保留未兑现显存，daemon 重启后仍然有效；独占任务阻止全部 N 张卡上的队列回填。
+
+命令只启动一次，`CUDA_VISIBLE_DEVICES` 包含按物理编号升序排列的全部分配卡。
+请使用 `torchrun --standalone` 等分布式启动器，等待所有 worker 结束，并将终止信号
+转发给在独立 session 中运行的 worker。取消操作向启动器的进程组发信号。
+OOM 重试和孤儿恢复均释放完整分配，但保留请求的卡数。多机调度及 GPU 拓扑优化暂不支持。
 
 ## 4. 为什么不能真正等价于 Slurm
 
@@ -118,10 +130,16 @@ new_estimate = max(ceil(old_estimate * 1.25), observed_peak + 256MB)
 省略 `--memory`（或显式使用 `--memory auto`）时，首次任务以 1MB 内部哨兵值
 加 `reserve` 通过资源门槛。领取任务时记录该卡的 `launch_free_memory`；校准完成
 之前，调度器先把这块启动空闲区对同一 gpuq 队列的其他任务视为已预留。对于
-非独占的长任务，当 worker 显存已经被持续观测至少 5 分钟，且最近 12 个样本位于
+非独占的单卡长任务，当 worker 显存已经被持续观测至少 5 分钟，且最近 12 个样本位于
 128MB 波动带内时，预留可收缩到已观测峰值，并继续保留至少 1024MB 波动空间。
 后续峰值上涨会立即抬高预留下界。daemon 重启后内存稳定窗口重新计时；`--exclusive`
 任务始终阻止同卡 backfill。该机制不能阻止未接入本队列的其他用户进程抢占显存。
+
+多卡任务按卡汇总 worker 进程组及后代进程（包括 torchrun 的独立 session rank）
+的显存，取各卡中的最大值作为峰值，
+不把不同卡的显存相加。OOM 学习使用所分配卡中最小的启动空闲显存。
+由于各 rank 可能在不同时刻初始化，多卡首次 auto 探测在本次尝试结束前保留每张卡
+各自的启动空闲区；已知每卡峰值时可用 `--memory` 允许正常回填。
 
 如果命令以可识别 OOM 退出，设日志中解析到的失败分配为 `requested`（无法解析
 则为 0），新的任务显存下界为：
@@ -139,8 +157,9 @@ auto 模式不使用 `max_retries` 限制 OOM 次数，每次 OOM 都继续抬�
 绝不是任意错误重试：非 OOM 退出立即 `failed/command`，启动和 runner 异常也
 立即失败。
 
-若一次 OOM 后学出的 `learned_memory + reserve` 严格大于当前 allowlist 内任一
-可见单卡的最大总显存，调度器将任务终止为：
+申请 N 张卡时，若一次 OOM 后学出的每卡 `learned_memory + reserve` 严格大于
+当前候选卡中第 N 大的总显存，调度器将任务终止为以下状态；若发现的卡数少于 N，
+则继续等待：
 
 ```text
 status=failed
@@ -153,11 +172,11 @@ CUDA/HIP 错误文本；自定义框架若吞掉或改写 OOM，gpuq 会按普�
 
 ## 7. 峰值显存的局限
 
-daemon 通过 `nvidia-smi` 按 worker PID 采样峰值。以下情况可能低估：
+daemon 通过 `nvidia-smi` 采样峰值，多卡任务按 worker 进程组及后代汇总。以下情况可能低估：
 
-- 任务启动多个独立 CUDA 子进程；
+- 单卡任务启动 CUDA 子进程，或多卡 rank 脱离进程树并被重新托管；
 - 峰值短于采样间隔；
 - 驱动不暴露进程级显存；
-- 分布式任务在多 GPU 上运行。
+- 任务绕过可见设备范围使用未分配的 GPU。
 
 所以历史峰值用于辅助下一次估计，不能替代 `--reserve`。

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -87,6 +87,9 @@ class Job:
     updated_at: str
     started_at: str | None
     finished_at: str | None
+    gpu_count: int = 1
+    assigned_gpus: tuple[int, ...] = ()
+    launch_free_memory_by_gpu: dict[int, int] = field(default_factory=dict)
 
     @property
     def required_free_memory_mb(self) -> int:
@@ -108,6 +111,9 @@ class Job:
             "cwd": self.cwd,
             "env": dict(self.env),
             "gpu_allowlist": list(self.gpu_allowlist) if self.gpu_allowlist else None,
+            "gpu_count": self.gpu_count,
+            "assigned_gpus": list(self.assigned_gpus),
+            "launch_free_memory_by_gpu": dict(self.launch_free_memory_by_gpu),
             "memory_mb": self.memory_mb,
             "memory_mode": self.memory_mode,
             "reserve_mb": self.reserve_mb,

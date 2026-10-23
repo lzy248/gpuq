@@ -77,7 +77,7 @@ and OOM learning; it cannot provide Slurm's hard guarantees.
 
 - Linux
 - NVIDIA driver and a working `nvidia-smi`
-- A CUDA workload that addresses the selected visible card as `cuda:0`
+- A CUDA workload using visible device IDs (`cuda:0` for one GPU, local ranks for multiple GPUs)
 
 The standalone binary does not require Python. A source installation requires Python
 3.10+. Python 3.11+ uses the standard library only; Python 3.10 installs the small
@@ -168,7 +168,23 @@ gpuq cancel 1
 gpuq retry 1 --memory auto
 ```
 
-### Physical GPU IDs vs. `cuda:0`
+### One job on multiple GPUs
+
+Use `--gpus N` (alias `--gpu-count N`) to request N GPUs on this machine. The
+default remains one GPU; `--gpu 0,1` alone is an allowlist, not a two-GPU request.
+
+```bash
+gpuq submit --gpus 2 --gpu 0,1,2,3 --memory 12000 --reserve 1500 \
+  -- torchrun --standalone --nproc_per_node=2 train.py
+```
+
+This waits for two eligible GPUs, each with at least 13500 MB free after queue
+reservations. All selected cards must pass stable sampling and the final recheck
+before the task starts. `--memory`, `--reserve`, and OOM learning are per GPU.
+The task must support multi-GPU execution itself; gpuq launches the command once.
+Use a launcher such as `torchrun` that waits for all its workers to finish.
+
+### Physical GPU IDs vs. visible device IDs
 
 If the scheduler chooses physical GPU 1, it starts the child with:
 
@@ -178,6 +194,11 @@ CUDA_VISIBLE_DEVICES=1
 
 The child therefore sees that card as `cuda:0`. Pass `cuda:0` to your framework,
 not the original physical index.
+
+For a two-GPU assignment such as physical GPUs 1 and 3, the child receives
+`CUDA_VISIBLE_DEVICES=1,3`, ordered by physical ID. They appear as `cuda:0` and
+`cuda:1`; distributed ranks should use their local rank. `gpuq list` and
+`gpuq show --json JOB_ID` report all assigned physical IDs.
 
 ## How auto memory works
 
@@ -255,8 +276,8 @@ managed runners and training workers.
 - claims fairness or isolation across users;
 - guarantees that an external process cannot win the launch race.
 
-Version 0.2 manages one physical GPU per job. It does not schedule multi-GPU or
-multi-node commands. Process-level peak sampling can underestimate forked or very
+gpuq supports single-node multi-GPU jobs; multi-node scheduling is not supported.
+Process-level peak sampling can underestimate detached workers or very
 short-lived allocations. Read [Scheduling semantics](docs/scheduling.en.md) before
 using it for expensive unattended runs.
 

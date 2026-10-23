@@ -43,6 +43,7 @@ The `--` separator keeps training arguments from being parsed as gpuq options.
 | `--memory-mb N|auto` / `--memory N|auto` | No | Fixed job peak in MB or automatic learning; default `auto` |
 | `--reserve-mb N` / `--reserve N` | No | Additional launch-race and estimation margin; config default is 1024 MB |
 | `--gpu LIST` | No | Eligible physical GPU IDs, e.g. `--gpu 1` or `--gpu 0,1`; repeatable |
+| `--gpus N` / `--gpu-count N` | No | GPUs used simultaneously by this job on one host; positive integer, default 1 |
 | `--max-utilization N` | No | Optional launch-time utilization ceiling, 0–100 |
 | `--stable-samples N` | No | Consecutive eligible samples required before launch; default 3 |
 | `--exclusive` | No | Require no compute process and near-idle memory/utilization |
@@ -51,6 +52,23 @@ Omitting `--memory` is equivalent to `--memory auto`. The first probe requires
 `reserve + 1 MB`; only a recognizable CUDA/HIP OOM learns a new floor and requeues.
 Supplying a number selects fixed mode. The fixed number is the expected workload peak,
 not the model file size, and does not include reserve.
+
+Memory and reserve are **per GPU**. `--gpu` restricts candidate physical IDs;
+`--gpus` sets how many to select. A request larger than the number of distinct
+allowlisted IDs is rejected. If discovery finds too few cards, the job waits
+without reserving a partial set. For example:
+
+```bash
+gpuq submit --gpus 2 --gpu 0,1,2,3 --memory 12000 --reserve 1500 \
+  -- torchrun --standalone --nproc_per_node=2 train.py
+```
+
+gpuq launches the command once with all assigned IDs in `CUDA_VISIBLE_DEVICES`,
+sorted by physical ID; the application sees local devices `0..N-1`. The command
+must implement multi-GPU execution and wait for its workers (as `torchrun` does).
+Exclusivity, stable sampling, and the final resource check apply to every card.
+`list` displays the whole assignment; JSON includes `gpu_count` and `assigned_gpus`.
+The legacy JSON field `assigned_gpu` remains the first assigned GPU.
 
 ### Scheduling
 
@@ -62,9 +80,15 @@ not the model file size, and does not include reserve.
 | `--retry-on-oom` | Off | Enable bounded OOM growth in fixed mode; always active in auto mode |
 
 Auto mode retries recognized OOMs without a count limit while the learned requirement
-fits an eligible single GPU. Non-OOM exits, assertions, data errors, launch failures,
-and runner failures terminate immediately. If learned memory plus reserve exceeds every
-eligible card, the job terminates with `failure_kind=oom_exceeds_device`.
+fits the requested number of eligible GPUs. Non-OOM exits, assertions, data errors, launch failures,
+and runner failures terminate immediately. If learned memory plus reserve exceeds
+the Nth-largest eligible GPU's total memory for an N-GPU request, the job
+terminates with `failure_kind=oom_exceeds_device`. Too few discovered cards alone
+does not trigger this failure. A multi-GPU auto probe retains each card's own
+launch-time reservation for the entire uncalibrated attempt; OOM requeues the whole job.
+
+After upgrading, restart the daemon before submitting multi-GPU jobs so it uses
+the new scheduler. Existing database rows migrate automatically as single-GPU jobs.
 
 ### Process, logs, and notification
 

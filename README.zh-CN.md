@@ -72,7 +72,7 @@
 
 - Linux
 - NVIDIA 驱动和可用的 `nvidia-smi`
-- CUDA 子任务应把调度器选中的可见卡写作 `cuda:0`
+- CUDA 子任务应使用可见设备编号：单卡为 `cuda:0`，多卡按 local rank 选择设备
 
 独立二进制不需要 Python；源码安装需要 Python 3.10+。Python 3.11+ 只使用标准库；
 Python 3.10 会安装用于读取配置的轻量兼容依赖 `tomli`。
@@ -159,7 +159,22 @@ gpuq cancel 1
 gpuq retry 1 --memory auto
 ```
 
-### 物理 GPU 和 `cuda:0`
+### 同一个任务使用多张 GPU
+
+使用 `--gpus N`（别名 `--gpu-count N`）申请本机 N 张卡。默认仍为单卡；单独写
+`--gpu 0,1` 只是允许选卡的范围，不表示同时申请两张卡。
+
+```bash
+gpuq submit --gpus 2 --gpu 0,1,2,3 --memory 12000 --reserve 1500 \
+  -- torchrun --standalone --nproc_per_node=2 train.py
+```
+
+这会等待两张符合条件的 GPU：扣除队列预留后，每张卡都至少有 13500MB 可用。
+所有选中卡都通过稳定采样和启动前复查后才启动任务。`--memory`、`--reserve`
+和 OOM 学习均按每张卡计算。训练程序本身需要支持多卡；gpuq 只启动一次命令。
+请使用 `torchrun` 等会等待所有 worker 结束的启动器。
+
+### 物理 GPU 和程序内设备编号
 
 调度器选择物理 GPU 1 时，会设置：
 
@@ -169,6 +184,10 @@ CUDA_VISIBLE_DEVICES=1
 
 子进程只能看到这一张卡，并把它编号为 `cuda:0`。因此训练命令应使用 `cuda:0`，
 不能继续使用原物理编号。
+
+若分配到物理 GPU 1 和 3，子进程收到按物理编号排序的 `CUDA_VISIBLE_DEVICES=1,3`，
+在程序内分别对应 `cuda:0` 和 `cuda:1`；分布式进程应使用自己的 local rank。
+`gpuq list` 和 `gpuq show --json JOB_ID` 会显示全部已分配的物理 GPU 编号。
 
 ## 自动显存如何工作？
 
@@ -237,8 +256,8 @@ systemctl --user status gpuqd.service
 - 声称可以提供跨用户公平性或隔离；
 - 保证队列外进程不会赢得启动竞态。
 
-0.2 版本每个任务只管理一张物理 GPU，不支持多 GPU 或多机调度。按进程采样峰值
-可能低估 fork 子进程或极短峰值。执行昂贵的无人值守任务前，请阅读
+支持单机多 GPU 任务，不支持多机调度。按进程采样峰值可能低估脱离任务进程树的
+worker 或极短峰值。执行昂贵的无人值守任务前，请阅读
 [调度模型与安全边界](docs/scheduling.md)。
 
 ## 开发

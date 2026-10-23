@@ -39,6 +39,7 @@ gpuq submit [OPTIONS] -- COMMAND [ARGUMENTS...]
 | `--memory-mb N|auto` / `--memory N|auto` | 否 | 固定峰值（MB）或自动学习；默认 `auto` |
 | `--reserve-mb N` / `--reserve N` | 否 | 额外留给竞态、驱动波动和估计误差的显存；默认 1024MB |
 | `--gpu LIST` | 否 | 允许使用的物理 GPU，如 `--gpu 1`、`--gpu 0,1`；可重复；省略表示任意卡 |
+| `--gpus N` / `--gpu-count N` | 否 | 同一任务同时使用的本机 GPU 数量；正整数，默认 1 |
 | `--max-utilization N` | 否 | 启动时 GPU 利用率硬上限 0–100；省略则不设硬上限，候选卡仍优先选择低利用率 |
 | `--stable-samples N` | 否 | 资源条件必须连续满足的采样次数；默认 3 |
 | `--exclusive` | 否 | 要求无 compute 进程、显存和利用率接近空闲 |
@@ -47,6 +48,20 @@ gpuq submit [OPTIONS] -- COMMAND [ARGUMENTS...]
 和稳定采样条件后试跑；仅当日志包含可识别 CUDA/HIP OOM 时，才学习新的最低
 显存并等待重试。显式写数字则进入固定估计模式；该数字应是训练峰值而不是权重
 文件大小，并应另留 1～2GB `--reserve`。
+
+显存和安全余量均按**每张 GPU**计算。`--gpu` 指定候选卡范围，`--gpus` 指定选取
+数量；请求数量超过 allowlist 中不同编号的数量时拒绝提交。发现的卡数不足时等待，
+不会先占住一部分卡。例如：
+
+```bash
+gpuq submit --gpus 2 --gpu 0,1,2,3 --memory 12000 --reserve 1500 \
+  -- torchrun --standalone --nproc_per_node=2 train.py
+```
+
+gpuq 只启动一次命令，并将全部已分配的物理编号按升序放入 `CUDA_VISIBLE_DEVICES`；
+程序内对应设备 `0..N-1`。命令本身必须支持多卡且等待 worker 结束（如 `torchrun`）。
+独占、稳定采样和启动前资源检查适用于每张卡。`list` 显示全部分配编号，JSON 增加
+`gpu_count` 和 `assigned_gpus`；原有 `assigned_gpu` 字段保留为分配列表中的第一张卡。
 
 ### 调度参数
 
@@ -60,8 +75,13 @@ gpuq submit [OPTIONS] -- COMMAND [ARGUMENTS...]
 `--max-retries 2` 表示最多三次总尝试：初次运行加两次重试。
 
 以上重试次数只约束固定显存模式。auto 模式对可识别 OOM 不限次数；普通退出、
-断言、数据或代码错误立即失败。学习出的 `memory + reserve` 一旦超过 allowlist 中
-最大单卡总显存，会以 `failure_kind=oom_exceeds_device` 终止。
+断言、数据或代码错误立即失败。申请 N 张卡时，若学习出的每卡 `memory + reserve`
+超过候选卡中第 N 大的总显存，会以 `failure_kind=oom_exceeds_device` 终止；仅发现
+卡数不足时继续等待。多卡 auto 首次探测在本次尝试结束前保留每张卡各自的启动
+空闲区；OOM 时将整个任务重新排队。
+
+升级后请先重启 daemon，再提交多卡任务，确保使用新版调度器。已有数据库中的
+任务自动按单卡任务迁移。
 
 ### 进程与日志参数
 

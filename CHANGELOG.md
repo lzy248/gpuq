@@ -6,6 +6,9 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ### English
 
+- Support single-node multi-GPU jobs with `--gpus N` / `--gpu-count N`, atomic
+  group assignment, per-card reservations and OOM learning, and distributed-rank
+  memory sampling. Existing jobs and submissions remain single-GPU by default.
 - Allow a long-running non-exclusive auto probe to release unused launch-time
   reservation after a configurable process-memory stability window, while retaining a
   1 GiB fluctuation margin by default.
@@ -15,6 +18,8 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ### 中文
 
+- 新增 `--gpus N` / `--gpu-count N` 支持单机多卡任务，一次领取整组 GPU，按卡预留和
+  学习 OOM 显存需求，并采样分布式 rank 的显存。已有任务和默认提交仍使用单卡。
 - 非独占的长时 auto probe 在通过可配置的进程显存稳定窗口后，可以释放未使用的
   启动时预留；默认仍保留 1GiB 波动空间。
 - 已观测峰值持续作为动态预留下界；daemon 重启或进程显存样本缺失后保守地重新

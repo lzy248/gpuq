@@ -27,6 +27,7 @@ class LaunchDecision:
     required_memory_mb: int
     outstanding_reservation_mb: int
     utilization_percent: int
+    gpu_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,23 @@ def process_exists(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def process_descends_from(pid: int, ancestor: int) -> bool:
+    """Recognize ranks that torchrun starts in separate process groups."""
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen:
+        if pid == ancestor:
+            return True
+        seen.add(pid)
+        try:
+            # The comm field can contain spaces and parentheses. Fields after
+            # its final ')' start with state, then parent PID.
+            fields = Path(f"/proc/{pid}/stat").read_text().rpartition(")")[2].split()
+            pid = int(fields[1])
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
 
 
 def runner_command(state_dir: str, job_id: int, *, frozen: bool | None = None) -> list[str]:
@@ -105,6 +123,10 @@ class Scheduler:
             pass
 
     def _auto_probe_can_share(self, job: Job) -> bool:
+        # Multi-GPU ranks can initialize at different times. Keep each card's
+        # launch region reserved throughout the uncalibrated attempt.
+        if job.gpu_count > 1:
+            return False
         observation = self.auto_probe_observations.get(job.id)
         if observation is None:
             return False
@@ -146,50 +168,56 @@ class Scheduler:
                 recovered.append(job.id)
         return recovered
 
+    @staticmethod
+    def _observed_memory(job: Job, states: list[GPUState]) -> dict[int, int]:
+        """Sum this job's ranks on each card, never sum across cards."""
+        observed: dict[int, int] = {}
+        if job.worker_pid is None:
+            return observed
+        for state in states:
+            if state.index not in job.assigned_gpus:
+                continue
+            for process in state.processes:
+                owned = process.pid == job.worker_pid
+                if not owned and job.gpu_count > 1:
+                    try:
+                        owned = os.getpgid(process.pid) == job.worker_pid
+                    except OSError:
+                        pass
+                    if not owned:
+                        owned = process_descends_from(process.pid, job.worker_pid)
+                if owned:
+                    observed[state.index] = (
+                        observed.get(state.index, 0) + process.used_memory_mb
+                    )
+        return observed
+
     def _reservations(self, states: list[GPUState]) -> dict[int, GPUReservation]:
-        process_memory = {
-            (state.index, process.pid): process.used_memory_mb
-            for state in states
-            for process in state.processes
-        }
         reservations: dict[int, GPUReservation] = {}
         for job in self.db.active():
-            if job.assigned_gpu is None:
-                continue
-            current = reservations.get(job.assigned_gpu, GPUReservation())
-            observed = (
-                process_memory.get((job.assigned_gpu, job.worker_pid), 0)
-                if job.worker_pid is not None
-                else 0
-            )
-            target_memory = job.memory_mb
-            probe_margin = job.reserve_mb
-            if job.is_uncalibrated_auto_probe and job.launch_free_memory_mb is not None:
-                probe_margin = max(probe_margin, self.settings.auto_probe_release_margin_mb)
-                if job.exclusive or not self._auto_probe_can_share(job):
-                    # Preserve the full launch-time region during warm-up. An
-                    # exclusive job never releases it while active.
-                    target_memory = max(
-                        target_memory,
-                        job.launch_free_memory_mb - probe_margin,
-                    )
-                else:
-                    # A stable probe keeps its observed peak plus the margin
-                    # carried below in reserve_mb.
-                    target_memory = max(
-                        target_memory,
-                        job.peak_memory_mb,
-                        observed,
-                    )
-            reservations[job.assigned_gpu] = GPUReservation(
-                outstanding_memory_mb=(
-                    current.outstanding_memory_mb
-                    + max(0, target_memory - observed)
-                ),
-                reserve_mb=max(current.reserve_mb, probe_margin),
-                active_jobs=current.active_jobs + 1,
-                exclusive_active=current.exclusive_active or job.exclusive,
-            )
+            observed_by_gpu = self._observed_memory(job, states)
+            for gpu_index in job.assigned_gpus:
+                current = reservations.get(gpu_index, GPUReservation())
+                observed = observed_by_gpu.get(gpu_index, 0)
+                target_memory = job.memory_mb
+                probe_margin = job.reserve_mb
+                launch_free = job.launch_free_memory_by_gpu.get(
+                    gpu_index, job.launch_free_memory_mb
+                )
+                if job.is_uncalibrated_auto_probe and launch_free is not None:
+                    probe_margin = max(probe_margin, self.settings.auto_probe_release_margin_mb)
+                    if job.exclusive or not self._auto_probe_can_share(job):
+                        target_memory = max(target_memory, launch_free - probe_margin)
+                    else:
+                        target_memory = max(target_memory, job.peak_memory_mb, observed)
+                reservations[gpu_index] = GPUReservation(
+                    outstanding_memory_mb=(
+                        current.outstanding_memory_mb + max(0, target_memory - observed)
+                    ),
+                    reserve_mb=max(current.reserve_mb, probe_margin),
+                    active_jobs=current.active_jobs + 1,
+                    exclusive_active=current.exclusive_active or job.exclusive,
+                )
         return reservations
 
     @staticmethod
@@ -252,28 +280,34 @@ class Scheduler:
                     )
                 else:
                     self.stability[key] = 0
-            if not eligible:
+            eligible = [
+                row for row in eligible
+                if self.stability[(job.id, row[2].index)] >= job.stable_samples
+            ]
+            if len(eligible) < job.gpu_count:
                 continue
             # Memory is a hard feasibility gate.  Among GPUs that can safely
             # fit the job, prefer the least-loaded device; use best-fit only
             # as a tie-breaker so we do not place new work on an already busy
             # card merely because it has slightly less free memory.
-            _, _, selected, reservation, required = min(
+            selected = sorted(
                 eligible, key=lambda row: (row[1], row[0], row[2].index)
-            )
-            stable = self.stability[(job.id, selected.index)]
-            if stable >= job.stable_samples:
-                decisions.append(
-                    LaunchDecision(
-                        job_id=job.id,
-                        gpu_index=selected.index,
-                        stable_count=stable,
-                        free_memory_mb=selected.free_memory_mb,
-                        required_memory_mb=required,
-                        outstanding_reservation_mb=reservation.outstanding_memory_mb,
-                        utilization_percent=selected.utilization_percent,
-                    )
+            )[:job.gpu_count]
+            indices = tuple(sorted(row[2].index for row in selected))
+            decisions.append(
+                LaunchDecision(
+                    job_id=job.id,
+                    gpu_index=indices[0],
+                    gpu_indices=indices,
+                    stable_count=min(self.stability[(job.id, index)] for index in indices),
+                    free_memory_mb=min(row[2].free_memory_mb for row in selected),
+                    required_memory_mb=max(row[4] for row in selected),
+                    outstanding_reservation_mb=max(
+                        row[3].outstanding_memory_mb for row in selected
+                    ),
+                    utilization_percent=max(row[2].utilization_percent for row in selected),
                 )
+            )
         self.stability = {key: value for key, value in self.stability.items() if key in alive_keys}
         return decisions
 
@@ -282,7 +316,7 @@ class Scheduler:
         jobs: list[Job],
         states: list[GPUState],
     ) -> list[Job]:
-        """Fail calibrated auto jobs that cannot fit on any eligible card."""
+        """Fail calibrated auto jobs that cannot fit on enough eligible cards."""
         runnable: list[Job] = []
         for job in jobs:
             if not job.is_auto_memory or job.oom_count == 0:
@@ -293,12 +327,14 @@ class Scheduler:
                 for state in states
                 if job.gpu_allowlist is None or state.index in job.gpu_allowlist
             ]
-            if not eligible_states:
+            if len(eligible_states) < job.gpu_count:
                 # The allowlisted device may be temporarily undiscoverable;
                 # lack of a sample is not evidence of an impossible request.
                 runnable.append(job)
                 continue
-            maximum_mb = max(state.total_memory_mb for state in eligible_states)
+            maximum_mb = sorted(
+                (state.total_memory_mb for state in eligible_states), reverse=True
+            )[job.gpu_count - 1]
             if job.required_free_memory_mb > maximum_mb:
                 self.db.fail_impossible_memory(
                     job.id,
@@ -310,26 +346,17 @@ class Scheduler:
         return runnable
 
     def refresh_peaks(self, states: list[GPUState]) -> None:
-        process_memory = {
-            (state.index, process.pid): process.used_memory_mb
-            for state in states
-            for process in state.processes
-        }
         active_probe_ids: set[int] = set()
         now = self.clock()
         for job in self.db.active():
             if job.worker_pid is None:
                 continue
-            observed = (
-                process_memory.get((job.assigned_gpu, job.worker_pid))
-                if job.assigned_gpu is not None
-                else None
-            )
-            if observed is None:
+            observed = max(self._observed_memory(job, states).values(), default=None)
+            if observed is None and job.gpu_count == 1:
                 observed = self.backend.process_memory_mb(job.worker_pid)
             if observed is not None and observed > job.peak_memory_mb:
                 self.db.update_peak(job.id, observed)
-            if not job.is_uncalibrated_auto_probe or job.exclusive:
+            if not job.is_uncalibrated_auto_probe or job.exclusive or job.gpu_count > 1:
                 continue
             active_probe_ids.add(job.id)
             if observed is None or observed <= 0:
@@ -368,24 +395,29 @@ class Scheduler:
         # second authoritative snapshot immediately before claiming the job.
         second = {state.index: state for state in self.backend.sample()}
         job = self.db.get(decision.job_id)
-        state = second.get(decision.gpu_index)
-        reservation = self._reservations(list(second.values())).get(
-            decision.gpu_index, GPUReservation()
-        )
-        if state is None or not self._allowed(job, state, reservation):
-            self.stability[(job.id, decision.gpu_index)] = 0
-            self.db.set_waiting_memory(job.id)
-            return None
+        reservations = self._reservations(list(second.values()))
+        for gpu_index in decision.gpu_indices:
+            state = second.get(gpu_index)
+            reservation = reservations.get(gpu_index, GPUReservation())
+            if state is None or not self._allowed(job, state, reservation):
+                self.stability[(job.id, gpu_index)] = 0
+                self.db.set_waiting_memory(job.id)
+                return None
+        selected_states = [second[index] for index in decision.gpu_indices]
         if not self.db.claim(
             job.id,
-            state.index,
-            launch_free_memory_mb=state.free_memory_mb,
-            launch_total_memory_mb=state.total_memory_mb,
+            decision.gpu_index,
+            gpu_indices=decision.gpu_indices,
+            launch_free_memory_mb=min(state.free_memory_mb for state in selected_states),
+            launch_total_memory_mb=min(state.total_memory_mb for state in selected_states),
+            launch_free_memory_by_gpu={
+                state.index: state.free_memory_mb for state in selected_states
+            },
         ):
             return None
         claimed = self.db.get(job.id)
         try:
-            self.launcher(claimed, state.index)
+            self.launcher(claimed, decision.gpu_index)
         except Exception as error:
             self.db.finish(
                 job.id,
@@ -484,7 +516,8 @@ def run_daemon(settings: Settings, *, once: bool = False, dry_run: bool = False)
             if decision is not None:
                 action = "would launch" if dry_run else "launched"
                 print(
-                    f"gpuqd {action} job={decision.job_id} gpu={decision.gpu_index} "
+                    f"gpuqd {action} job={decision.job_id} "
+                    f"gpu={','.join(map(str, decision.gpu_indices))} "
                     f"free={decision.free_memory_mb}MB "
                     f"reserved={decision.outstanding_reservation_mb}MB "
                     f"required={decision.required_memory_mb}MB "

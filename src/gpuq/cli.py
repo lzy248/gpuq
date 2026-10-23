@@ -98,7 +98,7 @@ def _db(args: argparse.Namespace) -> tuple[Settings, QueueDB]:
 
 
 def _job_line(job: Job) -> str:
-    gpu = "-" if job.assigned_gpu is None else str(job.assigned_gpu)
+    gpu = ",".join(map(str, job.assigned_gpus)) or "-"
     if job.is_auto_memory:
         estimate = "probe" if job.oom_count == 0 else f">={job.memory_mb}"
         resources = f"auto:{estimate}+{job.reserve_mb}MB"
@@ -106,6 +106,8 @@ def _job_line(job: Job) -> str:
     else:
         resources = f"{job.memory_mb}+{job.reserve_mb}MB"
         attempts = f"{job.attempt}/{job.max_retries + 1}"
+    if job.gpu_count > 1:
+        resources = f"{job.gpu_count}x{resources}"
     return (
         f"{job.id:5d}  {job.status:18s}  p={job.priority:4d}  gpu={gpu:>2s}  "
         f"mem={resources:>22s}  try={attempts:>7s}  {job.name}"
@@ -236,6 +238,7 @@ def command_submit(args: argparse.Namespace) -> int:
         cwd=str(cwd),
         env=_parse_env(args.env),
         gpu_allowlist=_parse_gpus(args.gpu),
+        gpu_count=args.gpu_count,
         memory_mb=memory_mb,
         memory_mode=memory_mode,
         reserve_mb=reserve,
@@ -251,6 +254,8 @@ def command_submit(args: argparse.Namespace) -> int:
     )
     print(f"submitted job {job.id}: {job.name}")
     print(f"command: {shlex.join(job.command)}")
+    if job.gpu_count > 1:
+        print(f"GPUs: {job.gpu_count}; memory and reserve below are per GPU")
     if job.is_auto_memory:
         print(
             f"requested: auto probe + {job.reserve_mb}MB reserve; "
@@ -470,10 +475,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory",
         type=_parse_memory,
         default="auto",
-        help="预计峰值 GPU 显存（MB），或 auto；默认 auto，仅在 OOM 时学习重试",
+        help="每张 GPU 的预计峰值显存（MB），或 auto；默认 auto，仅在 OOM 时学习重试",
     )
-    submit.add_argument("--reserve-mb", "--reserve", type=int, help="额外安全余量；默认读取配置")
+    submit.add_argument("--reserve-mb", "--reserve", type=int, help="每张 GPU 的额外安全余量；默认读取配置")
     submit.add_argument("--gpu", action="append", help="允许的物理 GPU，例如 --gpu 0,1；可重复")
+    submit.add_argument(
+        "--gpus", "--gpu-count", dest="gpu_count", type=_positive_int, default=1,
+        help="同一任务同时使用的 GPU 数量；默认 1，全部满足条件后一起启动",
+    )
     submit.add_argument(
         "--max-utilization",
         type=int,
