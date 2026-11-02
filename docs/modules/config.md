@@ -12,6 +12,11 @@
 
 ## 接口与数据
 
+[cluster] 不进入 Settings，由 [cluster.load_cluster](cluster.md) 单独读取；完整字段、默认值和
+优先顺序见[集群配置表](../cluster_usage.md#gpuq-节点配置)。全局模式/总上限来自 etcd init 策略，
+不使用 [gpuq] 对应值；节点资源阈值仍使用 Settings。节点 work_dir 独立于 state_dir。
+
+
 `load_settings(*, state_dir=None, config_path=None) -> Settings`。
 支持 `[gpuq]` 表，也支持顶层键；没有配置文件时使用默认值。
 

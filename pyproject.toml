@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-gpuq"
-version = "0.2.0"
+version = "0.3.0"
 description = "A personal opportunistic GPU job queue for unmanaged shared servers"
 readme = "README.md"
 requires-python = ">=3.10"

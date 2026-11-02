@@ -15,6 +15,7 @@
 | 命令 / 函数 | 输入到输出或副作用 |
 |---|---|
 | `main(argv=None)` | 调用 handler，最终 `SystemExit(code)`；不是返回整数的库 API |
+| `--cluster` / `cluster init/status` | 全局队列路由/初始化与节点状态；命令差异见[CLI 集群语义](../cli_reference.md#--cluster-命令语义)，不打开普通本地 DB |
 | `init` / `command_init` | 创建状态目录/DB；目标配置不存在时写示例，已有文件不覆盖 |
 | `submit` | `--` 后保留 argv；校验 cwd、环境键、GPU 编号；持久化 Job 并打印 ID/log |
 | `list` / `ls` | 默认取 200 条；TTY 且超过默认 20 条/页时翻页；JSON/管道不进入交互屏幕 |
@@ -28,6 +29,9 @@
 | `daemon` | 传入 Settings、once、dry_run；--background 走显式后台启动 |
 | `projects` | 显示项目并发限制、持久轮次、活跃和待运行数；支持 JSON |
 
+submission_values(args, settings) 只规范化命令、cwd、env 与资源参数，返回供 QueueDB.submit
+使用的 dict；本地/集群提交共用。它不打开 DB、不启动任务，DB 仍执行最终校验。
+
 提交默认 auto：入库 `memory_mode=auto, memory_mb=1, retry_on_oom=True`。
 `--gpus`/`--gpu-count` 默认 1；`--gpu` 可重复/逗号分隔并去重。
 `--env KEY=VALUE` 只拆第一个等号、校验变量名；命令不通过隐式 shell 执行。
@@ -38,6 +42,8 @@ show 文本/JSON 与 list JSON 共享 _job_display_dict；Job.as_dict 的原始�
 
 ## 关键流程与不变量
 
+全局 --cluster 及 cluster init/status 先转入 [集群入口](cluster.md)，与 --remote 互斥；
+--gpuq-cluster-call 为仅用于缓存/日志的内部 SSH 入口。
 全局 `--remote` 在打开本地 DB 前转入 [SSH](remote.md)。远程配置与同步参数见
 [远程手册](../remote_usage.md)；本地调用拒绝远程专用选项。内部 --gpuq-remote-call 路由到协议服务端。
 submit 的 --project 覆盖自动身份，--project-limit 修改该项目持久普通任务并发上限；

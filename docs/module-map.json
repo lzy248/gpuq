@@ -79,7 +79,9 @@
         "tests/test_docs.py",
         "tests/test_projects.py",
         "tests/test_remote.py",
-        "tests/test_environment.py"
+        "tests/test_environment.py",
+        "tests/test_cluster.py",
+        "tests/test_cluster_etcd.py"
       ]
     },
     {
@@ -97,7 +99,8 @@
         "assets/gpuq-logo.svg",
         "LICENSE",
         ".gitignore",
-        "MANIFEST.in"
+        "MANIFEST.in",
+        ".github/release-notes/v0.3.0.md"
       ]
     },
     {
@@ -129,6 +132,24 @@
       "doc": "docs/modules/projects.md",
       "files": [
         "src/gpuq/projects.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/coordination.md",
+      "files": [
+        "src/gpuq/coordination.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/cluster-transfer.md",
+      "files": [
+        "src/gpuq/cluster_transfer.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/cluster.md",
+      "files": [
+        "src/gpuq/cluster.py"
       ]
     }
   ]

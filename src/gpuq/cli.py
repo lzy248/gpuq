@@ -216,8 +216,12 @@ def command_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_submit(args: argparse.Namespace) -> int:
-    settings, db = _db(args)
+def submission_values(args: argparse.Namespace, settings: Settings) -> dict:
+    """Normalize submission arguments without opening a queue or starting work.
+
+    Local and cluster submission share resource/env parsing. QueueDB.submit remains
+    responsible for database-level validation and atomic project registration.
+    """
     command = list(args.command)
     if command and command[0] == "--":
         command.pop(0)
@@ -237,7 +241,7 @@ def command_submit(args: argparse.Namespace) -> int:
     stable = settings.default_stable_samples if args.stable_samples is None else args.stable_samples
     memory_mode = "auto" if args.memory_mb == "auto" else "fixed"
     memory_mb = 1 if memory_mode == "auto" else int(args.memory_mb)
-    job = db.submit(
+    return dict(
         name=name,
         command=command,
         cwd=str(cwd),
@@ -260,6 +264,9 @@ def command_submit(args: argparse.Namespace) -> int:
         log_path=str(log_path),
         notify=not args.no_notify,
     )
+def command_submit(args: argparse.Namespace) -> int:
+    settings, db = _db(args)
+    job = db.submit(**submission_values(args, settings))
     print(f"submitted job {job.id}: {job.name}")
     print(f"command: {shlex.join(job.command)}")
     print(f"project: {job.project_id}")
@@ -519,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--state-dir", help="覆盖状态目录，默认 ~/.local/state/gpuq")
     parser.add_argument("--config", help="覆盖配置文件，默认 ~/.config/gpuq/config.toml")
+    parser.add_argument("--cluster", action="store_true", help="Use the shared quorum-backed queue")
     parser.add_argument("--remote", help="SSH profile, alias, IP or user@host")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--ssh-identity")
@@ -645,14 +653,30 @@ def build_parser() -> argparse.ArgumentParser:
     projects = sub.add_parser("projects", help="查看项目并发限制和队列统计")
     projects.add_argument("--json", action="store_true")
     projects.set_defaults(function=command_projects)
+    cluster = sub.add_parser("cluster", help="Initialize or inspect a shared cluster")
+    cluster_sub = cluster.add_subparsers(dest="cluster_command", required=True)
+    cluster_init = cluster_sub.add_parser("init")
+    cluster_init.add_argument("--preferred-node")
+    cluster_init.add_argument("--max-running-jobs", type=_nonnegative_int, default=0)
+    cluster_init.add_argument("--scheduling", dest="scheduling_mode", choices=["fair", "fifo"], default="fair")
+    cluster_init.add_argument("--snapshot-copies", type=_positive_int, default=2)
+    cluster_init.add_argument("--failback-seconds", type=float, default=30)
+    cluster_init.add_argument("--failover-after-seconds", type=float, default=3600,
+                              help="Retry disconnected work after this delay; 0 disables timeout trigger")
+    cluster_init.add_argument("--failover-when-idle", action=argparse.BooleanOptionalAction, default=True,
+                              help="Retry disconnected work when other runnable work has drained")
+    cluster_init.add_argument("--max-failover-retries", type=_nonnegative_int, default=1,
+                              help="At-least-once node-loss retry budget per job; 0 disables")
+    cluster_sub.add_parser("status")
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     """Route CLI, SSH client or internal SSH server before opening a queue.
 
-    Only the exact internal flag invokes serve. Otherwise --remote dispatches
-    without touching the local DB; local commands reject remote-only options.
+    Exact internal flags invoke the corresponding SSH protocol. Explicit --cluster
+    routes to the quorum-backed queue; --remote routes to one independent host.
+    Neither opens the ordinary local queue; local commands reject sync options.
     Handlers return status codes, but this CLI API raises SystemExit. Expected
     validation/OS/subprocess errors become argparse errors with exit status 2.
     """
@@ -661,11 +685,19 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     try:
-        if argv == [REMOTE_FLAG]:
+        if argv == ["--gpuq-cluster-call"]:
+            from .cluster_transfer import serve as serve_cluster
+            code = serve_cluster()
+        elif argv == [REMOTE_FLAG]:
             code = serve()
         else:
             args = parser.parse_args(argv)
-            if args.remote:
+            if args.cluster or args.subcommand == "cluster":
+                if args.remote:
+                    raise ValueError("--cluster and --remote are separate modes; configure cluster endpoints/nodes")
+                from .cluster import dispatch as dispatch_cluster
+                code = dispatch_cluster(args)
+            elif args.remote:
                 code = dispatch(args, argv)
             else:
                 if any(getattr(args, name, None) for name in (

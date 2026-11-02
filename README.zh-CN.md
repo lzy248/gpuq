@@ -17,62 +17,27 @@
   <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
 </p>
 
-`gpuq` 是面向无统一调度器共享服务器的轻量级个人 GPU 机会式任务队列。它监测
-空闲显存，等待资源连续稳定后启动下一个任务，而且永远不会终止、暂停或占位抢夺
-其他人的进程。
-
-它刻意**不做迷你 Slurm**。Slurm 管理整个集群；`gpuq` 解决的是一个人在无人
-管理的 GPU 服务器上不想继续手工盯卡的问题。
+`gpuq` 是一个轻量级 GPU 任务队列，用于训练、评估和批量实验。
+提交命令后，它会监测可用显存，在资源满足条件时自动启动任务。
+既可以用于单台工作站，也可以通过 SSH 管理远程服务器，或将多台机器组成统一 GPU 池。
 
 ## 适合谁？
 
-开发者和 agent 请先读[工程总览](docs/README.md)，按任务进入模块说明，了解架构、
-接口契约、修改联动和验证命令。文档维护规范见 [AGENTS.md](AGENTS.md)。
+- 在实验室共享 GPU 上运行实验的研究人员和学生。
+- 需要批量训练、评估或调参，希望提交后自动排队运行的开发者。
+- 同时维护多个项目，需要设置并发数量和任务优先级的用户。
+- 经常使用本地和远程 GPU，希望统一提交、查看日志和管理任务的用户。
 
-以下环境很适合 `gpuq`：
+## 主要功能
 
-- 实验室或团队成员直接运行 CUDA 命令，共享一台工作站或服务器；
-- 手里有一批训练、评估任务，但没有 Slurm 管理员；
-- GPU 经常只占用一部分显存，希望安全利用剩余空间；
-- 需要持久队列、日志、依赖、优先级、重试和通知；
-- 无法安装 root 级服务，也不能接管其他用户的进程。
-
-如果需要多机训练、跨用户配额、集群公平调度、记账、硬资源预留、抢占或管理员级隔离，
-应使用 Slurm、Kubernetes 或其他正式集群调度器。
-
-## gpuq 和 Slurm 有什么区别？
-
-| | gpuq | Slurm |
-|---|---|---|
-| 管理范围 | 当前用户自己的机会式队列 | 整个集群的资源管理器 |
-| 部署方式 | 用户态 Python + SQLite，无需 root | 管理员部署控制平面 |
-| 资源权力 | 观察空闲显存，放得下才启动 | 分配并强制执行资源边界 |
-| 对待其他用户 | 永不终止或暂停他人进程 | 协调所有纳管任务 |
-| 部分空闲 GPU | 利用剩余显存回填任务 | 通常按配置资源分配 GPU |
-| 公平、配额、记账 | 同队列项目公平启动；无跨用户配额/记账 | 集群级能力 |
-| 多机/分布式分配 | 不支持 | 支持 |
-| 最适用场景 | 无托管的共享 GPU 服务器 | 正式管理的计算集群 |
-
-`gpuq` 无法阻止队列外用户在最后一次检查后抢先申请显存。它通过稳定采样、启动前
-复查、安全余量和 OOM 学习降低竞态，但无法提供 Slurm 的硬保证。
-
-## 主要特性
-
-- **远程统一使用。** 内置 SSH 提交/查询/取消，增量同步独立代码快照，复用远程环境与模型缓存；见[远程使用](docs/remote_usage.md)。
-- **项目公平启动。** 普通任务默认按项目轮转，可设置项目/总并发上限，保留显式优先级且不暂停已有训练；见[调度语义](docs/scheduling.md)。
-
-- **默认自动显存模式。** 无需手填预估；识别到 CUDA/HIP OOM 后学习更高下界，
-  并在不超过单卡上限时不限次数等待重试。
-- **明确的失败边界。** 非 OOM 的代码、数据和启动错误立即失败；学习需求超过所有
-  允许单卡时终止为 `oom_exceeds_device`，不会永久等待。
-- **机会式回填。** 显存是硬门槛；候选卡优先选择低利用率，利用率相同再 best-fit。
-- **降低启动竞态。** 连续稳定采样、启动前二次快照和慢启动任务的未兑现预留共同
-  降低队列内部超分配风险。
-- **持久个人队列。** SQLite 保存任务，终端或 daemon 重启后仍可恢复；支持依赖、
-  优先级、取消、日志和通知。
-- **交互式列表。** 终端中 `gpuq list` 默认每页 20 条，左右方向键翻页，`q/Esc`
-  退出；备用屏幕保证翻页不污染终端历史，管道和 JSON 始终保持非交互输出。
-- **绝不抢占。** `gpuq` 只控制由自己启动的任务进程组。
+- **自动调度。** 根据可用显存和利用率选择 GPU，支持连续采样和启动前显存余量设置。
+- **单卡与多卡任务。** 为一个命令分配一张或同一主机上的多张 GPU，可配合 `torchrun` 使用。
+- **显存学习。** 默认自动估计显存，遇到 GPU OOM 后学习并重试；也可指定显存需求和重试次数。
+- **项目并发管理。** 按项目轮转启动任务，设置项目和总并发上限，并通过优先级安排紧急任务。
+- **持久任务管理。** 保存任务状态、依赖、日志和通知，终端关闭或调度器重启后继续管理；
+  支持交互式列表和便于脚本处理的 JSON 输出。
+- **远程工作区。** 通过 SSH 提交和管理任务，增量同步代码，复用各节点的 Python 环境与模型缓存。
+- **统一 GPU 池。** 可选跨主机调度，支持主节点选举、备节点接管、原主回切和可配置的失联任务重排。
 
 ## 环境要求
 
@@ -85,10 +50,12 @@ Python 3.10 会安装用于读取配置的轻量兼容依赖 `tomli`。
 
 ## 安装
 
+当前版本为 **0.3.0**，可安装独立二进制或通过源码安装。
+
 ### 独立二进制（推荐，Linux x86_64）
 
 ```bash
-VERSION=0.2.0
+VERSION=0.3.0
 cd /tmp
 curl -fLO "https://github.com/lzy248/gpuq/releases/download/v${VERSION}/gpuq-v${VERSION}-linux-x86_64.tar.gz"
 curl -fLO "https://github.com/lzy248/gpuq/releases/download/v${VERSION}/gpuq-v${VERSION}-linux-x86_64.tar.gz.sha256"
@@ -195,32 +162,36 @@ CUDA_VISIBLE_DEVICES=1
 在程序内分别对应 `cuda:0` 和 `cuda:1`；分布式进程应使用自己的 local rank。
 `gpuq list` 和 `gpuq show --json JOB_ID` 会显示全部已分配的物理 GPU 编号。
 
-## 自动显存如何工作？
+## 自动显存估计
 
-```text
-queued
-  │ 空闲显存连续满足 reserve + 1MB
-  ▼
-试运行 ── 成功 ───────────────────► completed
-  │
-  ├─ 非 OOM / 启动错误 ───────────► 立即 failed
-  │
-  └─ 识别到 CUDA/HIP OOM
-          │ 学习更高最低显存
-          ├─ 最低值 + reserve > 最大允许单卡 ─► failed/oom_exceeds_device
-          └─ 否则 ─► retry_wait ─► 等待稳定空闲显存 ─► 再运行
+默认 auto 模式在空闲显存稳定满足余量和初始探测需求后试运行任务。识别到 GPU OOM 时，
+队列会提高显存估计并重新排队；其他命令错误会记录为失败，方便检查。
+已知峰值时可用 `--memory N` 指定需求，显存和余量均按每张 GPU 计算。
+
+显存学习、选卡和重试规则见[调度说明](docs/scheduling.md)。
+
+## SSH 远程与项目并发
+
+使用 `gpuq --remote user@host ...` 统一提交/查看/取消远程任务，默认增量同步独立代码快照，复用远程模型缓存。
+详见 [远程工作区与环境](docs/remote_usage.md)。`daemon --background` 可显式后台启动。
+
+`submit --project` 覆盖自动项目身份，`--project-limit N` 持久设置项目普通任务并发上限（默认 1）。
+`daemon --max-running-jobs N` 限制所有任务总并发（0 不限制），`--scheduling fair|fifo` 选择项目公平或旧 FIFO。
+总上限 2 时 A 单独可跑 2 个，A/B 竞争分为 1+1；运行任务不暂停。`projects --json` 查看策略与计数。
+
+### 本地与远程统一 GPU 池
+
+完成[集群配置](docs/cluster_usage.md)后，使用 `--cluster` 操作共享队列：
+
+```bash
+gpuq --cluster submit -- python train.py
+gpuq --cluster list
+gpuq --cluster logs -f 1
 ```
 
-OOM 后的任务显存下界取以下最大值：
-
-```text
-ceil(旧估计 × 1.25)
-观测进程峰值 + 失败分配量 + 256MB
-启动时空闲显存 - reserve + 256MB
-```
-
-只有明确识别出的 GPU OOM 才进入不限次数重试路径，避免坏命令永久循环。精确语义
-和局限见[调度模型与安全边界](docs/scheduling.md)。
+统一池由三个 etcd 投票成员协调，第三个可部署在不带 GPU 的轻量见证主机上。
+每个任务在一台机器上运行。失联重排策略可配置；网络分区时新旧执行可能重叠，
+重排参数和 checkpoint 处理方式见集群手册。
 
 ## 常用命令
 
@@ -237,6 +208,10 @@ ceil(旧估计 × 1.25)
 | `gpuq gpus` | 查看调度器采样到的 GPU 状态 |
 | `gpuq daemon` | 启动常驻调度循环 |
 | `gpuq doctor` | 检查状态、数据库和 GPU 发现 |
+| `gpuq projects --json` | 查看项目并发策略和任务数量 |
+| `gpuq --remote HOST list` | 通过 SSH 查看远程队列 |
+| `gpuq cluster status` | 查看统一池的主节点与节点状态 |
+| `gpuq --cluster list` | 查看共享队列 |
 
 完整参数见 [CLI 参数手册](docs/cli_reference.md)。
 
@@ -253,24 +228,20 @@ systemctl --user status gpuqd.service
 如果 `gpuq` 不在 `~/.local/bin`，需要修改 `ExecStart`。仓库提供的 unit 使用
 `KillMode=process`，仅重启 daemon 不会连带杀死独立 runner 和训练进程。
 
-## 安全模型和局限
+## 在共享 GPU 上使用
 
-`gpuq` 永远不会：
-
-- 终止、暂停或抢占无关 GPU 进程；
-- 分配占位 tensor 来“预留”显存；
-- 声称可以提供跨用户公平性或隔离；
-- 保证队列外进程不会赢得启动竞态。
-
-支持单机多 GPU 任务和 SSH 远程队列调用，不支持跨主机联合资源分配。按进程采样峰值可能低估脱离任务进程树的
-worker 或极短峰值。执行昂贵的无人值守任务前，请阅读
-[调度模型与安全边界](docs/scheduling.md)。
+gpuq 管理你提交的任务，保持其他用户的进程正常运行。启动前检查可用资源，
+`--reserve` 用于为共享 GPU 上的显存波动留出余量。
+资源检查与显存采样的具体行为见[调度说明](docs/scheduling.md)。
 
 ## 开发
 
+从[工程总览](docs/README.md)了解架构和模块接口，文档维护规范见 [AGENTS.md](AGENTS.md)。
+
 ```bash
 python -m pip install -e '.[dev]'
-ruff check src tests
+python scripts/check_docs.py
+ruff check src tests scripts/check_docs.py
 pytest
 ```
 
@@ -280,18 +251,11 @@ pytest
 ## 文档
 
 - [CLI 参数手册](docs/cli_reference.md) · [English](docs/cli_reference.en.md)
-- [调度模型与安全边界](docs/scheduling.md) · [English](docs/scheduling.en.md)
+- [调度说明](docs/scheduling.md) · [English](docs/scheduling.en.md)
+- [远程工作区与环境](docs/remote_usage.md) · [English](docs/remote_usage.en.md)
+- [统一 GPU 池与主备切换](docs/cluster_usage.md) · [English](docs/cluster_usage.en.md)
 - [变更日志](CHANGELOG.md)
 
 ## 许可证
 
 MIT © Liu Zeyang 与 gpuq contributors。详见 [LICENSE](LICENSE)。
-
-## SSH 远程与项目并发
-
-使用 `gpuq --remote user@host ...` 统一提交/查看/取消远程任务，默认增量同步独立代码快照，复用远程模型缓存。
-详见 [远程工作区与环境](docs/remote_usage.md)。`daemon --background` 可显式后台启动。
-
-`submit --project` 覆盖自动项目身份，`--project-limit N` 持久设置项目普通任务并发上限（默认 1）。
-`daemon --max-running-jobs N` 限制所有任务总并发（0 不限制），`--scheduling fair|fifo` 选择项目公平或旧 FIFO。
-总上限 2 时 A 单独可跑 2 个，A/B 竞争分为 1+1；运行任务不暂停。`projects --json` 查看策略与计数。

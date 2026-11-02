@@ -175,8 +175,8 @@ The daemon samples process memory through `nvidia-smi`. The observed peak may be
 - a task uses devices outside its assigned visible set.
 
 The OOM log's failed allocation and launch-time free-memory floor make auto mode more
-robust to missed peaks, but `reserve` remains important. Multi-node scheduling
-and GPU topology optimization are not supported.
+robust to missed peaks, but `reserve` remains important. Optional --cluster supports multi-host placement; each job stays on one host.
+GPU topology optimization is not supported.
 
 ## Fair project admission (default)
 
@@ -192,7 +192,9 @@ claims do not advance turns, but a launcher failure after claiming does.
 Competing projects have active or dependency-ready priority<=0 tasks. With total cap N>0, each project cap tightens
 to ceil(N/competing projects). A alone with project cap 2 and total cap 2 can run A+A; competing A/B get A+B.
 A later B waits for the next free slot without stopping A. Resource-blocked projects retain their share, potentially
-leaving capacity idle; dependency-blocked projects do not participate. Fairness is per queue, not across hosts/users.
+leaving capacity idle; dependency-blocked projects do not participate. Ordinary-mode fairness is per queue; --cluster applies admission across the shared pool, not other users.
+Assigned/starting/running executions count toward global caps, including disconnected nodes until bounded idle/timeout replacement (duplicates possible). OOM retries
+re-enter global admission; local resource checks still apply. See [cluster scheduling](cluster_usage.en.md).
 
 scheduling_mode="fifo" / daemon --scheduling fifo restores priority/ID order and ignores project caps, but keeps
 the total cap. `projects --json` shows caps, active/pending counts and last admission turns.

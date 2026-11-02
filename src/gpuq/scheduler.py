@@ -94,6 +94,39 @@ def runner_command(state_dir: str, job_id: int, *, frozen: bool | None = None) -
     ]
 
 
+def order_project_jobs(jobs: list[Job], active: list[Job],
+                       policies: dict[str, tuple[int, int]], settings: Settings) -> list[Job]:
+    """Apply the same admission policy to a local queue or an authoritative cluster snapshot.
+
+    Pure filtering/sorting: no resource sampling, claims or persistence. Caller must
+    protect cluster writes with the snapshot's revisions and current leader lease.
+    """
+    total_limit = settings.max_running_jobs
+    if total_limit and len(active) >= total_limit:
+        return []
+    if settings.scheduling_mode == "fifo":
+        return sorted(jobs, key=lambda job: (-job.priority, job.id))
+    counts = Counter(job.project_id for job in active)
+    competing = {job.project_id for job in [*active, *jobs] if job.priority <= 0}
+    share = (
+        max(1, (total_limit + len(competing) - 1) // len(competing))
+        if total_limit and competing else None
+    )
+    eligible = []
+    for job in jobs:
+        limit, _ = policies[job.project_id]
+        if share is not None:
+            limit = min(limit, share)
+        if job.priority > 0 or counts[job.project_id] < limit:
+            eligible.append(job)
+    return sorted(eligible, key=lambda job: (
+        -job.priority,
+        counts[job.project_id] if job.priority == 0 else 0,
+        policies[job.project_id][1] if job.priority == 0 else 0,
+        job.id,
+    ))
+
+
 class Scheduler:
     def __init__(
         self,
@@ -443,32 +476,7 @@ class Scheduler:
         Resource-blocked projects still compete for shares. Existing jobs are not
         paused; only a later successful DB claim advances a project's turn.
         """
-        active = self.db.active()
-        total_limit = self.settings.max_running_jobs
-        if total_limit and len(active) >= total_limit:
-            return []
-        if self.settings.scheduling_mode == "fifo":
-            return jobs
-        counts = Counter(job.project_id for job in active)
-        competing = {job.project_id for job in [*active, *jobs] if job.priority <= 0}
-        share = (
-            max(1, (total_limit + len(competing) - 1) // len(competing))
-            if total_limit and competing else None
-        )
-        policies = self.db.project_policies()
-        eligible = []
-        for job in jobs:
-            limit, _ = policies[job.project_id]
-            if share is not None:
-                limit = min(limit, share)
-            if job.priority > 0 or counts[job.project_id] < limit:
-                eligible.append(job)
-        return sorted(eligible, key=lambda job: (
-            -job.priority,
-            counts[job.project_id] if job.priority == 0 else 0,
-            policies[job.project_id][1] if job.priority == 0 else 0,
-            job.id,
-        ))
+        return order_project_jobs(jobs, self.db.active(), self.db.project_policies(), self.settings)
 
     def _launch(self, job: Job, gpu_index: int) -> None:
         environment = os.environ.copy()

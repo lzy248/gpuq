@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_status_priority_idx
     ON jobs(status, priority DESC, id ASC);
 CREATE INDEX IF NOT EXISTS jobs_dependency_idx ON jobs(dependency_id);
+CREATE TABLE IF NOT EXISTS submission_keys (
+    key TEXT PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES jobs(id)
+);
 CREATE TABLE IF NOT EXISTS projects (
     project_id TEXT PRIMARY KEY,
     concurrency_limit INTEGER NOT NULL DEFAULT 1 CHECK(concurrency_limit > 0),
@@ -234,12 +238,15 @@ class QueueDB:
         project_id: str | None = None,
         project_limit: int | None = None,
         default_project_limit: int = 1,
+        submission_key: str | None = None,
     ) -> Job:
         """Persist a job and its shared project policy in one transaction.
 
         Absent project_id is derived from cwd. default_project_limit seeds only a
         new project; explicit project_limit updates the policy shared by all jobs
         with that identity. Validation failure rolls back insertion and policy edits.
+        A submission_key makes insertion idempotent: reuse returns the original job
+        without changing its payload or policy. The key and job commit together.
         Returns a fresh Job; this does not claim GPUs or start a scheduler.
         """
         if not command:
@@ -265,6 +272,15 @@ class QueueDB:
             raise ValueError("max_utilization must be in [0, 100]")
         now = utcnow()
         with self.transaction(immediate=True) as connection:
+            if submission_key is not None:
+                if not submission_key:
+                    raise ValueError("submission_key must be nonempty")
+                existing = connection.execute(
+                    "SELECT jobs.* FROM jobs JOIN submission_keys ON jobs.id=submission_keys.job_id "
+                    "WHERE submission_keys.key=?", (submission_key,),
+                ).fetchone()
+                if existing is not None:
+                    return self._job(existing)
             if dependency_id is not None:
                 dependency = connection.execute(
                     "SELECT id FROM jobs WHERE id=?", (dependency_id,)
@@ -306,6 +322,8 @@ class QueueDB:
                 ),
             )
             job_id = int(cursor.lastrowid)
+            if submission_key is not None:
+                connection.execute("INSERT INTO submission_keys VALUES (?, ?)", (submission_key, job_id))
             connection.execute(
                 "INSERT OR IGNORE INTO projects(project_id, concurrency_limit) VALUES (?, ?)",
                 (project_id, default_project_limit),
@@ -316,6 +334,15 @@ class QueueDB:
                     (project_limit, project_id),
                 )
         return self.get(job_id)
+
+    def by_submission_key(self, key: str) -> Job | None:
+        """Find the original local execution after an ambiguous cluster handoff."""
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT jobs.* FROM jobs JOIN submission_keys ON jobs.id=submission_keys.job_id "
+                "WHERE submission_keys.key=?", (key,),
+            ).fetchone()
+        return self._job(row) if row is not None else None
 
     def get(self, job_id: int) -> Job:
         with self.connect() as connection:

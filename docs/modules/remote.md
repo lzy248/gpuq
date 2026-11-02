@@ -13,6 +13,10 @@
 
 ## 接口与数据
 
+普通 SSH 服务显式拒绝嵌套 --cluster/cluster 命令；集群的输入/日志走独立
+[cluster-transfer](cluster-transfer.md) 协议，不能用普通远程转发冒充全局调度。
+
+
 remote_profile 读取本地显式 --config、GPUQ_CONFIG 或默认路径的 [remotes.NAME]；
 未知名称直接作为 SSH 主机别名/IP/user@host。profile 字段：host、port、identity、command
 （字符串或 argv 数组）、config（远程配置）、state_dir、work_dir、cwd（no-sync）、python、requirements。

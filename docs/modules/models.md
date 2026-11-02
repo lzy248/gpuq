@@ -12,6 +12,12 @@ CLI/scheduler/runner 共用这些契约。冻结对象是快照，env/dict 内�
 
 ## 接口与数据
 
+集群在 Job JSON 外保存 node/execution/manifest/generation/attempt_base 等路由元数据，
+另保存 lost_since（UTC epoch）、failover_count 和 executions 内 superseded/cancellation_ack 审计；
+show 把时间转为本地 offset，原始存储不改。并扩展 assigned 状态（已分配、未接受），不写入本地 JobStatus 枚举。全局编号与节点 SQLite
+编号不同；只有 execution/submission_key 可跨边界对应，见[集群](cluster.md)。
+
+
 `GPUProcess(pid, used_memory_mb)` 是一条进程显存观测。
 `GPUState(index, uuid, name, total_memory_mb, used_memory_mb, free_memory_mb,
 utilization_percent, temperature_c, processes=())`；compute_process_count 为进程条目数。

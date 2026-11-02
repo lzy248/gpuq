@@ -17,68 +17,33 @@
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-22c55e"></a>
 </p>
 
-`gpuq` is a lightweight, per-user opportunistic GPU job queue for shared servers
-without a managed scheduler. It watches free VRAM, waits for a stable window, and
-starts your next job without killing, pausing, or reserving memory from anyone else.
-
-It is deliberately **not a miniature Slurm**. Slurm governs a cluster. `gpuq` helps
-one user stop babysitting an unmanaged GPU box.
+`gpuq` is a lightweight GPU task queue for training, evaluation, and batch experiments.
+Submit your commands once; gpuq watches available GPU memory and starts jobs when resources are ready.
+Use it on a workstation, through SSH on a remote server, or across a shared pool of machines.
 
 ## Who is it for?
 
-Developers and agents: start with the [engineering guide](docs/README.md) for architecture,
-module contracts, change routes, and validation commands. Follow [AGENTS.md](AGENTS.md)
-to keep code and documentation in sync.
+- Researchers and students running experiments on shared lab GPUs.
+- Developers queuing training, evaluation, or parameter sweeps without watching GPU availability.
+- Users with several projects who want configurable concurrency and priorities.
+- Users working across local and remote GPUs who want consistent submission, logs, and task management.
 
-`gpuq` fits when:
+## Features
 
-- a lab or team shares a workstation/server by launching CUDA commands directly;
-- you have a backlog of training or evaluation jobs but no Slurm administrator;
-- GPUs are often partially occupied and you want to use leftover VRAM safely;
-- you want a persistent personal queue, logs, dependencies, retries, and notifications;
-- installing a root-level service or taking control of other users' processes is not an option.
-
-Use Slurm, Kubernetes, or another managed scheduler instead when you need multi-node
-jobs, cross-user quotas, cluster-wide fair-share scheduling, accounting, hard reservations,
-preemption, or administrative resource isolation.
-
-## gpuq vs. Slurm
-
-| | gpuq | Slurm |
-|---|---|---|
-| Scope | One user's opportunistic queue | Cluster-wide resource manager |
-| Deployment | User-space Python + SQLite; no root | Administrator-managed control plane |
-| Authority | Observes free VRAM and launches when it fits | Allocates and enforces resources |
-| Other users | Never kills or pauses their processes | Coordinates all enrolled jobs |
-| Partial GPUs | Backfills leftover VRAM | Usually allocates configured GPU resources |
-| Fairness / quotas / accounting | Fair project admission within a queue; no cross-user quotas/accounting | Cluster-wide capabilities |
-| Multi-node / distributed allocation | Not supported | Supported |
-| Best fit | Unmanaged shared GPU servers | Managed clusters |
-
-`gpuq` cannot prevent a user outside the queue from allocating memory after its last
-check. It reduces that race with stable samples, a launch-time recheck, safety reserve,
-and OOM learning; it cannot provide Slurm's hard guarantees.
-
-## Highlights
-
-- **Unified SSH remotes.** Submit, inspect and cancel remotely with incremental isolated snapshots and persistent environments/model caches; see [remote use](docs/remote_usage.en.md).
-- **Fair project admission.** Ordinary jobs rotate across projects with configurable project/total caps, explicit priorities and no preemption; see [scheduling](docs/scheduling.en.md).
-
-- **Auto VRAM mode by default.** Submit without estimating memory; recognizable
-  CUDA/HIP OOMs teach the queue a higher minimum and retry without a count limit.
-- **Correct failure boundary.** Non-OOM code/data/launch errors fail immediately.
-  A learned request larger than every eligible single GPU terminates as
-  `oom_exceeds_device` instead of waiting forever.
-- **Opportunistic backfill.** Memory is the hard gate; among eligible GPUs, lower
-  utilization wins, with best-fit as a tie-breaker.
-- **Race reduction.** Stable sampling, an authoritative second snapshot, and
-  outstanding reservations for slow-starting jobs reduce accidental overcommit.
-- **Persistent personal queue.** SQLite-backed jobs survive terminals and daemon
-  restarts; dependencies, priorities, cancellation, logs, and notifications are built in.
-- **Interactive queue view.** `gpuq list` shows 20 jobs per page in a TTY; use
-  left/right arrows to move and `q` or `Esc` to exit. An alternate screen keeps
-  scrollback clean; pipes and JSON stay noninteractive.
-- **No preemption.** `gpuq` only controls process groups that it started.
+- **Automatic scheduling.** Choose GPUs by available memory and utilization, with stable sampling
+  and a configurable memory reserve before launch.
+- **Single- and multi-GPU jobs.** Run a command on one GPU or allocate several GPUs on the same host
+  for workloads such as `torchrun`.
+- **Memory learning.** Start with automatic memory estimation and learn from GPU OOMs, or provide
+  a fixed estimate and retry limit.
+- **Project concurrency.** Rotate launch opportunities across projects, set project and total task caps,
+  and prioritize urgent jobs.
+- **Persistent task management.** Keep task state, dependencies, logs, and notifications across terminal
+  and scheduler restarts. Inspect the queue interactively or use JSON output in scripts.
+- **Remote workspaces.** Submit and manage jobs over SSH, upload only changed content, and reuse
+  Python environments and model caches on each node.
+- **Shared GPU pool.** Optionally schedule across local and remote machines, with master election,
+  standby takeover, preferred-master failback, and configurable retries for disconnected jobs.
 
 ## Requirements
 
@@ -92,10 +57,12 @@ The standalone binary does not require Python. A source installation requires Py
 
 ## Install
 
+Current version: **0.3.0**. Install the standalone binary or build from source.
+
 ### Standalone binary (recommended, Linux x86_64)
 
 ```bash
-VERSION=0.2.0
+VERSION=0.3.0
 cd /tmp
 curl -fLO "https://github.com/lzy248/gpuq/releases/download/v${VERSION}/gpuq-v${VERSION}-linux-x86_64.tar.gz"
 curl -fLO "https://github.com/lzy248/gpuq/releases/download/v${VERSION}/gpuq-v${VERSION}-linux-x86_64.tar.gz.sha256"
@@ -207,40 +174,38 @@ For a two-GPU assignment such as physical GPUs 1 and 3, the child receives
 `cuda:1`; distributed ranks should use their local rank. `gpuq list` and
 `gpuq show --json JOB_ID` report all assigned physical IDs.
 
-## How auto memory works
+## Automatic memory estimation
 
-```text
-queued
-  │ stable free VRAM >= reserve + 1 MB
-  ▼
-probe run ── success ───────────────► completed
-  │
-  ├─ non-OOM / launch error ───────► failed immediately
-  │
-  └─ recognized CUDA/HIP OOM
-          │ learn a higher minimum
-          ├─ minimum + reserve > largest eligible GPU ─► failed/oom_exceeds_device
-          └─ otherwise ─► retry_wait ─► wait for stable free VRAM ─► run again
+Auto memory mode starts a job when stable free memory covers the configured reserve and an initial
+probe. If the job encounters a recognized GPU OOM, gpuq raises its memory estimate and queues another
+attempt. Other command errors are recorded as failures for inspection. Use `--memory N` when you know
+the expected peak; memory and reserve values apply to each GPU.
+
+See [scheduling details](docs/scheduling.en.md) for memory learning, resource selection, and retry rules.
+
+## SSH remotes and project concurrency
+
+Use `gpuq --remote user@host ...` to submit, inspect and cancel remote tasks with incremental isolated code
+snapshots and persistent remote model caches. See [remote workspaces and environments](docs/remote_usage.en.md).
+`daemon --background` explicitly starts a detached daemon.
+
+`submit --project` overrides automatic project identity; `--project-limit N` persists the ordinary project cap (default 1).
+`daemon --max-running-jobs N` caps all active jobs (0 means unlimited); `--scheduling fair|fifo` selects fair projects or legacy FIFO.
+With total cap 2, A alone may run 2 tasks; competing A/B get 1+1 without pausing running tasks. Inspect with `projects --json`.
+
+### Shared local and remote GPU pool
+
+With [cluster configuration](docs/cluster_usage.en.md) in place, use `--cluster` to target the shared queue:
+
+```bash
+gpuq --cluster submit -- python train.py
+gpuq --cluster list
+gpuq --cluster logs -f 1
 ```
 
-A long-running non-exclusive first probe does not need to hold its whole
-launch-time free region until exit. After five minutes of observed worker VRAM
-and 12 consecutive samples within a 128 MB band, gpuq shrinks that reservation
-to the observed peak while retaining at least 1024 MB of fluctuation margin. A
-later increase raises the peak floor immediately. Active `--exclusive` jobs
-never release their card to backfill jobs.
-
-After an OOM, the learned job-memory floor is the maximum of:
-
-```text
-ceil(previous estimate × 1.25)
-observed process peak + failed allocation + 256 MB
-launch free memory - reserve + 256 MB
-```
-
-Only recognized GPU OOMs take this unbounded retry path. This distinction prevents a
-broken command from looping forever. See [Scheduling semantics](docs/scheduling.en.md)
-for exact behavior and limitations.
+The pool uses three etcd voting members for coordination; the third can be a small witness host without
+a GPU. Each job runs on one machine. Node-loss retries are configurable and may overlap with an old
+execution during a network partition; see the guide for retry settings and checkpoint handling.
 
 ## Common commands
 
@@ -257,6 +222,10 @@ for exact behavior and limitations.
 | `gpuq gpus` | Show the scheduler's GPU snapshot |
 | `gpuq daemon` | Run the persistent scheduling loop |
 | `gpuq doctor` | Check state, database, and GPU discovery |
+| `gpuq projects --json` | Inspect project concurrency and task counts |
+| `gpuq --remote HOST list` | Inspect a remote queue over SSH |
+| `gpuq cluster status` | Inspect shared-pool leadership and nodes |
+| `gpuq --cluster list` | Inspect the shared queue |
 
 See the complete [CLI reference](docs/cli_reference.en.md).
 
@@ -274,25 +243,21 @@ Adjust `ExecStart` if `gpuq` is installed outside `~/.local/bin`. The supplied u
 uses `KillMode=process`, so restarting only the daemon does not kill independently
 managed runners and training workers.
 
-## Safety model and limitations
+## Scheduling on shared GPUs
 
-`gpuq` never:
-
-- kills, pauses, or preempts unrelated GPU processes;
-- allocates dummy tensors to reserve VRAM;
-- claims fairness or isolation across users;
-- guarantees that an external process cannot win the launch race.
-
-gpuq supports single-node multi-GPU jobs; multi-node scheduling is not supported.
-Process-level peak sampling can underestimate detached workers or very
-short-lived allocations. Read [Scheduling semantics](docs/scheduling.en.md) before
-using it for expensive unattended runs.
+gpuq manages the jobs you submit and leaves other users' processes running. It checks available resources
+before launch; `--reserve` leaves headroom for memory fluctuations on shared GPUs. Resource checks and
+memory sampling are described in the [scheduling guide](docs/scheduling.en.md).
 
 ## Development
 
+Start with the [engineering guide](docs/README.md) for architecture and module contracts.
+Documentation conventions are in [AGENTS.md](AGENTS.md).
+
 ```bash
 python -m pip install -e '.[dev]'
-ruff check src tests
+python scripts/check_docs.py
+ruff check src tests scripts/check_docs.py
 pytest
 ```
 
@@ -303,19 +268,11 @@ welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow
 ## Documentation
 
 - [CLI reference](docs/cli_reference.en.md) · [中文](docs/cli_reference.md)
-- [Scheduling semantics and safety](docs/scheduling.en.md) · [中文](docs/scheduling.md)
+- [Scheduling guide](docs/scheduling.en.md) · [中文](docs/scheduling.md)
+- [Remote workspaces and environments](docs/remote_usage.en.md) · [中文](docs/remote_usage.md)
+- [Shared pool setup and failover](docs/cluster_usage.en.md) · [中文](docs/cluster_usage.md)
 - [Changelog](CHANGELOG.md)
 
 ## License
 
 MIT © Liu Zeyang and gpuq contributors. See [LICENSE](LICENSE).
-
-## SSH remotes and project concurrency
-
-Use `gpuq --remote user@host ...` to submit, inspect and cancel remote tasks with incremental isolated code
-snapshots and persistent remote model caches. See [remote workspaces and environments](docs/remote_usage.en.md).
-`daemon --background` explicitly starts a detached daemon.
-
-`submit --project` overrides automatic project identity; `--project-limit N` persists the ordinary project cap (default 1).
-`daemon --max-running-jobs N` caps all active jobs (0 means unlimited); `--scheduling fair|fifo` selects fair projects or legacy FIFO.
-With total cap 2, A alone may run 2 tasks; competing A/B get 1+1 without pausing running tasks. Inspect with `projects --json`.

@@ -11,6 +11,15 @@
 
 ## 接口与数据
 
+当前源码/包版本为 0.3.0，发布说明见 [v0.3.0](../../.github/release-notes/v0.3.0.md)。
+README 二进制下载示例为 0.3.0，与当前包版本一致。
+
+可选集群需部署三个独立 etcd v3 投票成员，见[中文部署](../cluster_usage.md) /
+[English](../cluster_usage.en.md)。A/B 运行 gpuq agent，见证仅运行 etcd。服务 ExecStart 使用
+`gpuq --config /path/config.toml --cluster daemon`，保持 KillMode=process；原服务不自动替换。
+备份 etcd 和各节点 work_dir，维护成员/TLS/权限；不要用独立 daemon 同时调度相同 GPU。
+
+
 源码发行清单：[MANIFEST.in](../../MANIFEST.in)。
 
 | 文件 | 重要信息 |
@@ -22,6 +31,7 @@
 | systemd/gpuqd.service | 用户服务 ExecStart=%h/.local/bin/gpuq daemon；Restart=on-failure、5 秒；KillMode=process；PYTHONUNBUFFERED=1 |
 | .github/workflows/ci.yml | main push、PR、手动触发；Python 3.10/3.11/3.12 lint/test；Python 3.12 包构建；文档检查在测试矩阵中执行 |
 | .github/workflows/release.yml | v* tag 推送触发；Ubuntu 22.04/Python 3.10 构建 Linux x86_64 二进制，smoke test 后发布 |
+| .github/release-notes/v0.3.0.md | 0.3.0 发布说明；由 v0.3.0 tag 工作流用于 GitHub Release |
 | .github/release-notes/v0.2.0.md | 该版本发布说明；新 tag 需对应文件，不能把旧文件当新版本说明 |
 | .github/ISSUE_TEMPLATE/bug_report.yml | 双语版本/复现/环境/日志表单，提醒脱敏 |
 | .github/ISSUE_TEMPLATE/config.yml | 允许空白 issue |
@@ -39,7 +49,8 @@ Python 包：`python -m build` 生成 sdist/wheel。
 
 发布时 tag（例如 vX.Y.Z）、包版本、__version__、notes 文件和归档版本必须一致。
 工作流通过 tag 定位 dist/gpuq-TAG-linux-x86_64.tar.gz；已有 release 时 upload --clobber，
-更新 title/notes；不存在时 create --verify-tag。它没有自动做版本同步。
+更新 title/notes；不存在时 create --verify-tag。它没有自动做版本同步。test_cli.py 校验 CLI 的 __version__ 与 pyproject 包版本一致；
+变更日志保留已发布版本历史，新功能归入 Unreleased 并标记目标版本。
 
 安装用户服务时复制 unit 到 ~/.config/systemd/user，daemon-reload 后 enable --now。
 自定义安装位置需改 ExecStart。KillMode=process 让只重启 daemon 不杀独立 runner/worker；

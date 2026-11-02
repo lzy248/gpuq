@@ -24,3 +24,25 @@ nvidia_smi = "nvidia-smi"
 # config = "~/.config/gpuq/config.toml"
 # state_dir = "~/.local/state/gpuq"
 # cwd = "/srv/project"  # --no-sync only
+
+# Optional shared pool. See docs/cluster_usage.md / .en.md for three-member etcd setup.
+# [cluster]
+# node_id = "a"  # default hostname; unique, persistent identity
+# namespace = "training"  # default "default"; identical on all pool nodes
+# endpoints = ["https://a.internal:2379", "https://b.internal:2379", "https://w.internal:2379"]
+# work_dir = "~/.local/share/gpuq/clusters/training"  # default derived from namespace
+# lease_seconds = 15  # minimum 10
+# python = "python3"
+# requirements = "requirements.lock"  # optional snapshot-relative hashed lock
+# ca = "~/.config/gpuq/ca.pem"
+# cert = "~/.config/gpuq/client.pem"
+# key = "~/.config/gpuq/client-key.pem"
+# token = "etcd-auth-token"  # optional; never commit real credentials
+# [cluster.nodes]
+# a = "local"
+# b = "train"  # SSH profile above; remote cluster.node_id must be b
+# Global policy is initialized once with gpuq cluster init, not from [gpuq] caps.
+# Node-loss retry policy is also set by cluster init (persisted in etcd):
+# --failover-after-seconds 3600 --failover-when-idle --max-failover-retries 1
+# At-least-once: a disconnected old training process may still run.
+# Set --max-failover-retries 0 at initialization if duplicates are unacceptable.

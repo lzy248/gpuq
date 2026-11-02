@@ -11,6 +11,12 @@
 
 ## 接口与数据
 
+集群 runner 仍只读写节点 SQLite，不持有 etcd 凭据或主租约；agent 将结果上报全局队列。
+独立运行语义保证单纯 agent/主节点切换不停止训练；启用失联替换后，回归 agent 会取消旧执行。
+集群环境提供全局任务/执行编号与 failover_count，便于区分跨节点重排的输出。每个全局重试建立新 execution，节点 max_retries
+按已用全局 attempt 扣减，学习显存和 oom_count 保留；auto OOM 规则不变。见[集群](cluster.md)。
+
+
 `execute_job(db, job_id, *, state_dir) -> int` 返回命令退出码（启动失败为 127）。
 内部 `main()` 接收 `--state-dir` 和 `--job-id`，打开该目录 queue.sqlite3。
 `is_oom_failure`、`parse_oom_requested_mb`、`learned_auto_memory_mb` 是分类/估算测试入口。

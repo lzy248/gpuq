@@ -8,7 +8,7 @@
 
 gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQLite 持久化，
 `nvidia-smi` 发现设备。支持单机单卡/多卡任务、显存学习、依赖和有界失联恢复。
-它提供 SSH 远程 CLI 与增量代码快照，但没有分布式控制平面，也不是 Slurm 或安全沙盒。
+它提供 SSH 远程 CLI、增量快照及可选 etcd 多数派控制的统一 GPU 池；不是 Slurm 或安全沙盒。
 不同用户的队列互不协调，无法保证外部进程不在启动窗口抢显存。
 
 默认提交是 auto 显存、1 张 GPU；`--gpu 0,1` 限定候选范围，`--gpus 2` 才申请两张。
@@ -20,6 +20,12 @@ gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQL
 ```mermaid
 flowchart LR
   CLI[cli: submit / inspect / cancel] --> DB[(SQLite jobs)]
+  CLI --> Pool[cluster: explicit shared queue]
+  Pool <--> Etcd[(three-member etcd quorum)]
+  Etcd <--> Agent[cluster agents + leased master]
+  Agent --> Inputs[replicated input snapshots]
+  Agent --> LocalJournal[(node execution journal)]
+  LocalJournal --> Scheduler
   CLI --> SSH[remote: SSH protocol]
   SSH --> Sync[sync: content cache + task snapshot]
   Sync --> Env[environment: optional locked venv]
@@ -43,6 +49,9 @@ flowchart LR
 1. 本地 CLI 验证参数后把 `Job` 写入本地 DB。指定 --remote 时先走 SSH，远程默认按内容增量
    接收代码、创建独立快照并准备可选环境，最后由远程 CLI 写远程 DB；查询/管理不经过同步。
    远程队列使用同一套 scheduler/runner 链路，提交本身不启动训练。
+   --cluster 则先复制输入再写 etcd 全局队列，选出的主节点统一准入，节点持久去重后接入本地执行链路；
+   失去多数派停止新授权，已有训练继续。有 quorum 时，失联任务默认在其他可运行工作清空或一小时后
+   最多重排一次（可能重复训练）；回归节点取消被替代执行。部署与回切见[集群使用](cluster_usage.md)。
 2. 每个状态目录一个 daemon，通过 `flock` 防止重复实例。每个 tick 最多启动一个任务，
    已启动任务可以并行。先核对失联进程、采样与峰值，再读取依赖满足的任务。
 3. 调度器默认在普通任务间按项目活跃数/持久轮次公平排序；显式正优先级优先。按卡扣除队列未兑现预留。所有选中卡稳定合格并通过第二次
@@ -54,6 +63,9 @@ flowchart LR
 
 ## 状态和数据放在哪里
 
+集群模式的权威元数据在 etcd；节点 work_dir 保存独立 SQLite 执行 journal、输入副本和缓存，
+不会复制或合并普通队列 SQLite。见[集群模块](modules/cluster.md)。
+
 默认状态目录 `~/.local/state/gpuq` 内有 `queue.sqlite3`、`logs/`、`gpuqd.lock`；
 默认配置 `~/.config/gpuq/config.toml`。数据库是任务事实来源，内存中稳定窗口不是持久状态。
 路径优先级及一个环境变量例外见 [配置](modules/config.md)。
@@ -64,6 +76,7 @@ flowchart LR
 | 状态 | 含义与负责模块 |
 |---|---|
 | `queued` / `waiting_memory` / `retry_wait` | 待调度；db 检查依赖，scheduler 检查资源 |
+| `assigned`（仅集群） | 全局分配到节点，尚未被执行节点接受；同样计入占用 |
 | `starting` | db 原子领取完成、整组 GPU 已记录，等待 runner 就绪 |
 | `running` | runner 已启动；worker PID 可能尚未登记 |
 | `completed` / `failed` / `cancelled` | 终态；runner 或管理路径写入 |
@@ -80,6 +93,9 @@ flowchart LR
 | 模块说明 | 覆盖范围 / 应解决的问题 |
 |---|---|
 | [入口](modules/entrypoints.md) | `__init__`、`__main__`、打包入口；Python/二进制怎样调用 CLI 与 runner |
+| [全局队列与选主](modules/cluster.md) | 多数派控制面、首选主回归、执行去重与节点隔离 |
+| [集群输入复制](modules/cluster-transfer.md) | 复制输入缓存与读取节点日志；不在传输时提交任务 |
+| [集群一致性适配](modules/coordination.md) | etcd 线性读取、事务、租约与失败隔离 |
 | [远程 SSH](modules/remote.md) | 请求协议、统一远程调用与失败边界 |
 | [增量同步](modules/sync.md) | 内容缓存、排除规则、独立代码快照 |
 | [远程环境](modules/environment.md) | 依赖锁文件、远程 venv 与模型缓存边界 |
@@ -103,6 +119,7 @@ flowchart LR
 
 | 要做什么 | 先读的模块 | 必须一起考虑 |
 |---|---|---|
+| 修改全局调度/选主/回切 | [集群](modules/cluster.md)、[一致性](modules/coordination.md)、[复制](modules/cluster-transfer.md) | 任期隔离、持久执行去重、三成员测试、双语部署手册 |
 | 修改远程提交、传输或环境 | [SSH](modules/remote.md)、[同步](modules/sync.md)、[环境](modules/environment.md) | 协议兼容、隔离快照、缓存复用、双语远程手册 |
 | 修改项目公平性 | [项目识别](modules/projects.md)、[调度器](modules/scheduler.md) | DB 持久轮次、并发限额、优先级、无抢占 |
 | 新增提交参数或 JSON 字段 | [CLI](modules/cli.md)、[模型](modules/models.md) | db 持久化/迁移；远程转发；用户双语 CLI 手册；CLI 与 DB 测试 |
@@ -140,7 +157,7 @@ python -m build
 - 纯 `Job` 对象是快照；进程/取消状态需要重新从 db 读取。`active()` 扫描全部活跃任务。
 - daemon 的命令行覆盖使用 dataclasses.replace 保留未覆盖配置。
 - 日志按多次尝试追加；OOM 当前根据末尾 128 KiB 文本识别，旧尝试文本仍可能在尾部。
-- 软件版本、已发布二进制和当前源码能力不能仅由 `0.2.0` 字符串推断；确认安装来源。
+- 当前版本为 `0.3.0`，源码、包元数据和二进制下载示例保持一致。
 - 新记录和执行器日志写 UTC；show 文本/JSON 与 list JSON 按 CLI 所在主机本地时区显示并带 offset。
   旧记录按自身 offset 解读，不自动改写；logs 不重写已有日志文本。
 
@@ -148,6 +165,7 @@ python -m build
 
 ## 其他文档与验收
 
+集群部署：[中文](cluster_usage.md) / [English](cluster_usage.en.md)。
 远程使用：[中文](remote_usage.md) / [English](remote_usage.en.md)。
 用户参数：[中文](cli_reference.md) / [English](cli_reference.en.md)。
 调度语义：[中文](scheduling.md) / [English](scheduling.en.md)。

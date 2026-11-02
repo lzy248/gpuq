@@ -4,7 +4,17 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ## Unreleased
 
+## [0.3.0] - 2026-11-02
+
 ### English
+
+- Add opt-in shared local/remote GPU scheduling with three-member etcd quorum, leased master election,
+  standby takeover and delayed preferred-master failback. Replicate input snapshots, persist execution
+  deduplication, preserve retry budgets and pause new authorization without quorum. Add deployment guides
+  and real three-member etcd integration tests; each task remains on one host.
+- Add bounded at-least-once node-loss retries: by default when other runnable work drains or after one hour,
+  at most once per job. Isolate replacement executions, reject stale results and cancel old work on return.
+  Expose policy switches and persistent retry/history audit; shared external writes may be duplicated.
 
 - Render `show` text/JSON and `list --json` timestamps in the CLI host’s local timezone with explicit offsets; keep UTC storage/logs.
 
@@ -25,6 +35,12 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 - Prevent backfill onto a GPU with an active exclusive queue job.
 
 ### 中文
+
+- 新增可选本地/远程统一 GPU 池，三成员 etcd 多数派选主、备节点接管和首选主稳定回切；
+  复制输入、持久执行去重、跨节点保留重试预算，缺多数派停止新授权。补充部署手册与真实
+  三成员集成测试；同一任务仍在单台主机执行。
+- 失联任务默认在其他可运行工作清空或一小时后有界重排，每任务最多一次；提供关闭/超时/次数配置，
+  独立执行目录、旧结果隔离、旧节点回归取消与持久审计。此策略可能重复训练和共享外部写入。
 
 - `show` 文本/JSON 和 `list --json` 时间按 CLI 所在主机本地时区显示并带 offset；存储/日志保持 UTC。
 

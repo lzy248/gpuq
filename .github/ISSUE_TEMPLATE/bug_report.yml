@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: gpuq version / 版本
-      placeholder: gpuq 0.2.0
+      placeholder: gpuq 0.3.0
     validations:
       required: true
   - type: textarea

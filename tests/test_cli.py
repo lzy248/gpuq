@@ -12,7 +12,8 @@ from gpuq.cli import (
     build_parser,
     main,
 )
-from gpuq.config import load_settings
+from gpuq import __version__
+from gpuq.config import load_settings, tomllib
 from gpuq.db import QueueDB
 
 from conftest import submit_job
@@ -153,7 +154,9 @@ def test_version_flag(capsys) -> None:
     with pytest.raises(SystemExit) as error:
         parser.parse_args(["--version"])
     assert error.value.code == 0
-    assert capsys.readouterr().out.strip() == "gpuq 0.2.0"
+    assert capsys.readouterr().out.strip() == f"gpuq {__version__}"
+    with (Path(__file__).resolve().parents[1] / "pyproject.toml").open("rb") as source:
+        assert tomllib.load(source)["project"]["version"] == __version__
 
 
 def test_default_auto_submit_is_persisted(tmp_path: Path) -> None:

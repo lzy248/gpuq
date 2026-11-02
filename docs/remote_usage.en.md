@@ -1,5 +1,8 @@
 # Unified local and remote use
 
+This guide describes independent --remote queues. For one shared local/remote pool and failover, use [--cluster](cluster_usage.en.md).
+
+
 [Engineering overview](README.md) · [中文](remote_usage.md) · [CLI reference](cli_reference.en.md)
 
 Install compatible gpuq versions on both hosts and configure OpenSSH keys and host verification:

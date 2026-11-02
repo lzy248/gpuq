@@ -267,8 +267,8 @@ def serve() -> int:
         raise ValueError("remote argv must be a string array")
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.remote:
-        raise ValueError("nested remote forwarding is not supported")
+    if args.remote or args.cluster or args.subcommand == "cluster":
+        raise ValueError("nested remote or cluster forwarding is not supported")
     if request.get("sync"):
         if args.subcommand != "submit":
             raise ValueError("only submit accepts a project snapshot")

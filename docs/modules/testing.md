@@ -10,12 +10,20 @@ pytest 验证队列契约，全部自动测试应能在没有物理 GPU 的 Linu
 [工程总览](../README.md) 提供完整安装/验证命令；[文档设施](documentation.md) 说明结构检查。
 测试通过不证明 CUDA/NCCL、真实 GPU 驱动兼容或断电后训练 checkpoint 正确。
 
+集群故障测试：[tests/test_cluster.py](../../tests/test_cluster.py)，覆盖任期、交接、去重、quorum 丢失、
+失联保留和全局公平。MemoryStore 只模拟事务/租约，不代替真实 etcd 多数派测试。
+[tests/test_cluster_etcd.py](../../tests/test_cluster_etcd.py) 在 GPUQ_TEST_ETCD 指定官方二进制时，
+用临时目录/随机 loopback 端口启动三个真实成员，验证宿主失联、旧任期拒绝、回归和丢失多数派。
+未设置该变量时跳过，不能把跳过当作集群故障测试通过。
+
 ## 接口与数据
 
 | 文件 | 覆盖内容 / 修改入口 |
 |---|---|
 | conftest.py | 临时 Settings/QueueDB；submit_job 工厂，默认 fixed=4000MB+1000MB reserve、stable=2、notify=False |
-| test_cli.py | UTC 存储与 show/list 文本与 JSON 本地时区显示及原记录不变、参数别名、默认 auto、提交/JSON、init、TTY 分页、日志 tail/follow 和 Ctrl-C |
+| test_cluster.py | 全局项目/总上限、选主/回切、失联占用、幂等执行、跨节点预算、多卡不跨机、取消、空闲/超时重排/预算/旧执行取消与结果隔离、假 SSH 输入复制/缓存/命名空间 |
+| test_cluster_etcd.py | 可选真实三成员 etcd、故障接管/回切、旧任期拒绝、租约与多数派丢失、真实事务下失联重排预算和取消优先 |
+| test_cli.py | CLI 版本与 pyproject 包版本一致性、 UTC 存储与 show/list 文本与 JSON 本地时区显示及原记录不变、参数别名、默认 auto、提交/JSON、init、TTY 分页、日志 tail/follow 和 Ctrl-C |
 | test_db.py | 序列化、优先级、依赖、迁移、终态 retry、auto 校准、带条件失联更新 |
 | test_gpu.py | nvidia-smi CSV 样本和空进程输出 |
 | test_scheduler.py | FakeBackend/FakeClock/gpu/mark_running 辅助；稳定、资源门槛、选卡、预留、auto 释放、独占、OOM 容量、入口和 systemd |

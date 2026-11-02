@@ -21,6 +21,7 @@
 | 方法 | 关键契约 |
 |---|---|
 | submit | 必须有命令；memory>0、reserve>=0、stable>=1、retries>=0；校验 mode、utilization、gpu_count、allowlist 大小和依赖存在 |
+| by_submission_key | 按持久幂等执行键取原 Job 或 None；不生成新的任务 |
 | get | 返回新快照；不存在抛 KeyError |
 | list | active 优先，其后 priority DESC/id ASC；默认最多 200 |
 | active | list(limit=None) 的 starting/running 过滤，无 200 条上限 |
@@ -35,6 +36,11 @@
 | retry | 只允许终态；可更换 memory/mode，mode 显式给出时重置 OOM 学习元数据 |
 | requeue_after_oom | runner 使用；保存新显存下界并增加 oom_count，不在这里决定重试策略 |
 | set_priority | 不存在抛 KeyError，返回更新后 Job |
+
+submission_keys(key PRIMARY KEY, job_id REFERENCES jobs) 保存幂等执行键。
+submit 可接受 submission_key，同一 key 与首次 Job 在同一事务提交；再次调用返回原任务，
+不覆盖命令、环境、状态或项目策略。仅传入可信的全局执行编号；不同重试必须使用不同执行键。
+此机制防止响应丢失/节点重启后重复入队，不让普通 CLI 自动重提未知状态任务。
 
 ## 关键流程与不变量
 

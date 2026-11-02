@@ -1,5 +1,8 @@
 # 本地与远程统一使用
 
+本页 --remote 是独立远程队列；如需本地与远程统一调度和主备切换，使用 [--cluster](cluster_usage.md)。
+
+
 [工程总览](README.md) · [English](remote_usage.en.md) · [CLI 手册](cli_reference.md)
 
 两端安装支持此功能的 gpuq，配置好 OpenSSH 密钥和主机验证后，本地直接使用：

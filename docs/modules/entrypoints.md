@@ -11,6 +11,11 @@
 
 ## 接口与数据
 
+CLI 还识别内部 --gpuq-cluster-call（SSH 输入复制/日志协议），显式 --cluster 与 cluster
+子命令进入 [cluster](cluster.md)。训练 runner 入口不变，仍面向节点本地 journal；
+普通 systemd 服务不会因存在 cluster 配置自动切换模式。
+
+
 | 调用 | 实际入口 |
 |---|---|
 | `gpuq ...` | pyproject 的 `gpuq.cli:main` |
@@ -20,7 +25,7 @@
 | Python 安装的内部执行器 | 当前 `sys.executable -m gpuq.runner --state-dir ... --job-id ...` |
 | 冻结二进制的内部执行器 | 当前可执行文件 `--gpuq-internal-runner --state-dir ... --job-id ...` |
 
-包级导出 `GPUState`、`Job`、`JobStatus`；`__version__` 当前为 `0.2.0`。
+包级导出 `GPUState`、`Job`、`JobStatus`；`__version__` 当前为 `0.3.0`。
 版本同时存在于 pyproject；构建脚本从 Python 包读取版本，发布工作流从 tag 定位产物。
 
 ## 关键流程与不变量

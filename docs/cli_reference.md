@@ -1,13 +1,13 @@
 # gpuq CLI 参数手册
 
-本文覆盖当前源码的公共命令和参数，包含 Unreleased 功能；已有 `0.2.0` 发行包不一定具备全部能力。
+本文覆盖 `0.3.0`的公共命令和参数；已有 `0.2.0` 发行包不包含本次新增功能。
 
 ## 全局参数
 
 全局参数必须写在子命令之前：
 
 ```bash
-gpuq [--remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
+gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
 ```
 
 | 参数 | 含义 | 默认值 |
@@ -15,6 +15,7 @@ gpuq [--remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
 | `--state-dir PATH` | SQLite、锁文件和默认日志目录 | `~/.local/state/gpuq` 或 `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML 配置文件 | `~/.config/gpuq/config.toml` 或 `GPUQ_CONFIG` |
 | `--version` | 显示安装版本后退出 | — |
+| `--cluster` | 使用 etcd 全局池；与 --remote 互斥 | 关闭 |
 | `--remote HOST` | SSH 主机/IP/user@host 或本地 profile；后续操作针对远程队列 | 见远程手册 |
 | `--ssh-port N` | 覆盖 SSH 端口 | profile/SSH 默认 |
 | `--ssh-identity PATH` | 本地 SSH 私钥路径 | profile/SSH 默认 |
@@ -25,6 +26,53 @@ gpuq [--remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
 远程模式中 `--config` 读取本地连接 profile，`--remote-config` 选择远程配置，`--state-dir` 指远程状态目录。
 默认工作区为 `~/.local/share/gpuq/workspaces`；SSH 选项仅适用于 `--remote`。
 完整 profile 字段、优先顺序和默认命令见[远程使用](remote_usage.md)。
+
+## `gpuq cluster init`
+
+一次性创建全局策略，要求至少三个 etcd 投票成员；不覆盖已有策略。
+
+| 参数 | 默认值 | 含义 |
+|---|---|---|
+| `--preferred-node ID` | 当前 cluster.node_id | 首选主；恢复后交回此节点 |
+| `--max-running-jobs N` | 0 | 全局任务数上限；0 不设上限 |
+| `--scheduling fair\|fifo` | fair | 全局准入模式 |
+| `--snapshot-copies N` | 2 | 提交所需输入确认副本数，至少 2 |
+| `--failback-seconds S` | 30 | 回切前稳定秒数；有限非负值 |
+| `--failover-after-seconds S` | 3600 | 失联超时秒数；0 禁用此触发条件 |
+| `--failover-when-idle` / `--no-failover-when-idle` | 开启 | 其他可运行工作清空时重排 |
+| `--max-failover-retries N` | 1 | 每任务至少执行一次的失联重排预算；0 关闭 |
+
+```bash
+gpuq cluster init --max-running-jobs 2 --failback-seconds 30
+```
+
+## `gpuq cluster status`
+
+失联重排可能重复仍在运行的训练；新执行独立目录，旧节点回归取消旧执行。共享外部写入需自行幂等，
+详细失败边界见集群手册。
+
+输出 JSON：当前 leader、持久全局策略、仍持有租约的节点（含 GPU 信息/错误及候选任务）。
+心跳在线不保证每个任务都可执行。部署和 `[cluster]` 完整默认表见[集群手册](cluster_usage.md)。
+
+## `--cluster` 命令语义
+
+支持 submit、daemon、list/ls、show、logs/log、cancel、retry、priority、projects、gpus、doctor。
+普通 init 不是集群命令，使用 cluster init。JOB_ID 均是全局编号。
+
+| 命令 | 集群特有行为 |
+|---|---|
+| submit | 先复制快照；支持 sync-exclude/include/preview；拒绝 no-sync/remote-cwd/自定义 log |
+| daemon | 启动候选主兼执行 agent；支持 poll/once/dry-run/background；拒绝模式/总上限覆盖 |
+| list/show | 增加 node/execution；show 还含历史、失联次数/时间、manifest、可执行节点；JSON 时间仍为带 offset 本地时间 |
+| projects/gpus/doctor | 始终 JSON；分别展示全局项目计数、节点 GPU、投票成员数/策略/是否有主 |
+| logs | 按节点 profile 读取当前 execution；follow 跟踪重试；不能选择历史 execution |
+| cancel | 活跃任务等节点确认；失联不立即释放名额 |
+| retry | 仅终态；保留学习，--memory 可重校准；--reset-attempts 重置 OOM 尝试预算 |
+| priority | 修改全局优先级，不抢占 |
+
+全局 etcd 策略优先于本机模式/总上限配置；节点资源检查仍生效。SSH 参数放在命名 profile 中，
+不能用全局 SSH 参数覆盖；--state-dir 不改变 cluster.work_dir。不自动导入旧队列，
+失败处理、模型/产物/续训边界见集群手册。
 
 ## `gpuq init`
 
@@ -108,7 +156,8 @@ gpuq 只启动一次命令，并将全部已分配的物理编号按升序放入
 
 ### 远程提交与同步参数
 
-仅适用于 `--remote`。默认增量同步代码并创建独立快照；模型权重默认排除，缓存留在远程。
+`--sync-exclude/include/preview` 同时支持 --remote 和 --cluster；后者复制到多个节点。
+`--no-sync/--remote-cwd` 仅适用于 --remote。两种模式默认增量同步，权重默认排除。
 
 | 参数 | 含义 |
 |---|---|

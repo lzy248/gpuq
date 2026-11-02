@@ -12,6 +12,12 @@
 
 ## 接口与数据
 
+[集群模式](cluster.md) 禁用本地自动 orphan 重排，不采用 Settings.max_orphan_retries；
+节点确认进程消失后上报 failed/orphaned，终态允许全局人工 retry。仅心跳失联不会认定进程死亡，
+本模块不负责跨节点重排。[cluster](cluster.md) 用独立 failover_count 预算在空闲/超时后替换未知执行，
+可能重复训练；原节点恢复时取消旧执行。两种重试预算和失败判断不能混用。
+
+
 limit 默认由 Settings.max_orphan_retries 提供，默认 0 关闭。独立表 orphan_recoveries：
 job_id 外键、recovery 序号、recovered_at（UTC ISO）、previous_attempt；主键 (job_id,recovery)。
 每任务累计次数持久化，与 OOM 次数和 attempt 独立；人工 reset_attempts 不清此表。

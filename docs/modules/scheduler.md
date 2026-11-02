@@ -13,6 +13,10 @@
 
 ## 接口与数据
 
+集群调用共享纯准入排序，FIFO 也显式按 priority DESC/id ASC 排序，不依赖输入顺序。
+节点 WorkerDB 仅向 runnable 暴露已接受的 execution；本地资源二次检查仍生效。
+全局占用与重试授权由[cluster](cluster.md)负责，本地自动 orphan 重排在集群中关闭。
+
 `Scheduler(settings=..., db=None, backend=None, launcher=None, process_checker=None, clock=None)`
 允许注入 GPU、启动回调、存活检查与单调时钟。launcher 签名仍为 `(Job, first_gpu_index)`；
 完整多卡集合从已领取 Job.assigned_gpus 读。`tick(dry_run=False)` 返回一个 LaunchDecision 或 None。
@@ -24,6 +28,8 @@ GPUReservation 按物理卡保存 outstanding_memory_mb、reserve_mb、active_jo
 
 ### 项目准入接口与持久状态边界
 
+order_project_jobs(jobs, active, policies, settings) 是无 IO 的共同策略入口；本地
+order_projects 从 DB 提供快照，集群调用方必须用权威状态和事务版本保护最终派发。
 order_projects(jobs) 输入为 DB.runnable 已处理依赖后的候选，返回过滤排序后的 Job 列表，
 函数本身只读 active/project_policies，不领取任务、不更新轮次。计数单位为任务，不是 GPU；
 一个多卡任务仍只占一个并发名额。项目活跃数包括该项目所有优先级的 starting/running。

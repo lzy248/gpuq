@@ -2,14 +2,14 @@
 
 [简体中文](cli_reference.md) · English
 
-This document covers the current source CLI, including Unreleased features; existing `0.2.0` releases may not include every capability.
+This document covers the `0.3.0` CLI; existing `0.2.0` releases do not include the new features.
 
 ## Global syntax
 
 Global options must precede the subcommand:
 
 ```bash
-gpuq [--remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
+gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
 ```
 
 | Option | Meaning | Default |
@@ -17,6 +17,7 @@ gpuq [--remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND .
 | `--state-dir PATH` | SQLite, lock, and default log directory | `~/.local/state/gpuq` or `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML configuration | `~/.config/gpuq/config.toml` or `GPUQ_CONFIG` |
 | `--version` | Print the installed version and exit | — |
+| `--cluster` | Use the shared etcd-backed pool; exclusive with --remote | Off |
 | `--remote HOST` | SSH host/IP/user@host or local profile; operations target that remote queue | See remote guide |
 | `--ssh-port N` | Override SSH port | Profile / OpenSSH defaults |
 | `--ssh-identity PATH` | Local SSH identity file | Profile / OpenSSH defaults |
@@ -27,6 +28,54 @@ gpuq [--remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND .
 In remote mode, `--config` reads local connection profiles, `--remote-config` selects remote configuration,
 and `--state-dir` refers to remote state. The default workspace is `~/.local/share/gpuq/workspaces`.
 SSH options require `--remote`. See [remote use](remote_usage.en.md) for profile fields, precedence and executable defaults.
+
+## `gpuq cluster init`
+
+Create global policy once; requires at least three voting etcd members. Existing policy is not overwritten.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--preferred-node ID` | Current cluster.node_id | Master to prefer and eventually hand back to |
+| `--max-running-jobs N` | 0 | Global task cap; 0 is unlimited |
+| `--scheduling fair\|fifo` | fair | Shared admission policy |
+| `--snapshot-copies N` | 2 | Minimum confirmed input replicas, at least 2 |
+| `--failback-seconds S` | 30 | Finite nonnegative stability grace before preferred-master handback |
+| `--failover-after-seconds S` | 3600 | Node-loss timeout; 0 disables this trigger |
+| `--failover-when-idle` / `--no-failover-when-idle` | enabled | Retry when other runnable work drains |
+| `--max-failover-retries N` | 1 | At-least-once retry budget per job; 0 disables |
+
+```bash
+gpuq cluster init --max-running-jobs 2 --failback-seconds 30
+```
+
+## `gpuq cluster status`
+
+Node-loss retries can duplicate still-running training. Replacements use isolated executions; old nodes
+cancel superseded work on return. See the guide before enabling shared external writes.
+
+Print JSON with leader, persisted policy and currently leased nodes (including GPU offers/errors).
+A live heartbeat does not prove every requested job can execute. Deployment and all `[cluster]` settings:
+[shared pool guide](cluster_usage.en.md).
+
+## `--cluster` command behavior
+
+Explicit pool routing supports submit, daemon, list/ls, show, logs/log, cancel, retry, priority, projects,
+gpus and doctor. Ordinary init is not a pool command; use cluster init. IDs refer to the global queue.
+
+| Command | Pool-specific behavior |
+|---|---|
+| submit | Replicates snapshots first; sync-exclude/include/preview supported; no no-sync/remote-cwd/custom log |
+| daemon | Runs one candidate/execution agent; poll/once/dry-run/background supported; rejects mode/total-cap overrides |
+| list/show | Adds node/execution; show also includes execution history, failover count/loss time, manifest and eligible nodes; JSON times remain local with offsets |
+| projects/gpus/doctor | Always JSON; shared project counts / leased node inventory / voter count, policy and leader presence |
+| logs | Reads current execution through its node profile; --follow tracks new executions; old history is not selectable |
+| cancel | Active execution waits for node acknowledgement; disconnected work retains capacity |
+| retry | Terminal jobs only; retains learning unless --memory recalibrates it; --reset-attempts resets the OOM attempt budget |
+| priority | Updates shared priority; no preemption |
+
+Global policy in etcd takes precedence over local scheduling mode/caps; per-node resource checks remain.
+Cluster SSH options belong in named profiles, not global SSH overrides. `--state-dir` does not relocate
+cluster work_dir. No existing queue history is imported. See the guide for failures, data and checkpoint limits.
 
 ## `gpuq init`
 
@@ -114,7 +163,8 @@ the new scheduler. Existing database rows migrate automatically as single-GPU jo
 
 ### Remote submission and sync options
 
-Require `--remote`. Default: incremental upload and isolated code snapshots; model weights are excluded and caches remain remote.
+`--sync-exclude/include/preview` also support --cluster replication. --no-sync/--remote-cwd require --remote.
+Both modes use incremental isolated snapshots; model weights are excluded by default.
 
 | Option | Meaning |
 |---|---|

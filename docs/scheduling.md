@@ -79,7 +79,7 @@ argmin(utilization, free_memory - required_memory, gpu_index)
 命令只启动一次，`CUDA_VISIBLE_DEVICES` 包含按物理编号升序排列的全部分配卡。
 请使用 `torchrun --standalone` 等分布式启动器，等待所有 worker 结束，并将终止信号
 转发给在独立 session 中运行的 worker。取消操作向启动器的进程组发信号。
-OOM 重试和孤儿恢复均释放完整分配，但保留请求的卡数。多机调度及 GPU 拓扑优化暂不支持。
+OOM 重试和孤儿恢复均释放完整分配，但保留请求的卡数。可选 --cluster 支持跨主机放置任务；同一任务仍不跨机，未优化 GPU 拓扑。
 
 ## 4. 为什么不能真正等价于 Slurm
 
@@ -190,7 +190,9 @@ daemon 通过 `nvidia-smi` 采样峰值，多卡任务按 worker 进程组及后
 竞争项目来自活跃/依赖满足的 priority<=0 任务。总上限 N>0 时，项目限额进一步收紧至
 ceil(N/竞争项目数)。单项目限制 2、总数 2 时可 A+A，A/B 同时等待时 A+B。
 B 后来出现则等下一空位，已有 A 不停止。资源暂不满足的项目仍保留份额，可能暂时空闲；
-依赖未满足的项目不占份额。fairness 仅限同一队列，不是跨主机或跨用户全局控制。
+依赖未满足的项目不占份额。普通模式 fairness 限本队列；--cluster 对整个池做全局准入，仍不控制其他用户。
+集群 assigned/starting/running 均计入上限，失联执行先保留占用，默认空闲或超时后可有界重排（可能重复执行）；OOM 重试重新全局准入。
+节点原有资源检查仍生效。详见[集群调度与切换](cluster_usage.md)。
 
 scheduling_mode="fifo" / daemon --scheduling fifo 恢复优先级/ID 顺序并忽略项目限额，仍遵守总上限。
 `projects --json` 可检查项目限额、活跃/待运行数和上次轮次。
