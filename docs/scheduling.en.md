@@ -85,7 +85,7 @@ scripts. Auto mode ignores `max_retries` only for its recognized OOM path.
 Jobs are considered by:
 
 ```text
-priority DESC, job_id ASC
+priority DESC; priority 0 in fair mode: project active count, last turn, job_id ASC
 ```
 
 A job that does not fit does not block lower-priority jobs that do fit. This is
@@ -177,3 +177,22 @@ The daemon samples process memory through `nvidia-smi`. The observed peak may be
 The OOM log's failed allocation and launch-time free-memory floor make auto mode more
 robust to missed peaks, but `reserve` remains important. Multi-node scheduling
 and GPU topology optimization are not supported.
+
+## Fair project admission (default)
+
+Defaults: scheduling_mode="fair", default_project_limit=1, max_running_jobs=0 (no total cap).
+Fairness allocates new starts without preempting/pausing running tasks. Projects default to Git roots, then project
+marker directories or cwd; --project overrides identity. Remote snapshots retain stable source identity.
+--project-limit persists a project cap; omitting it retains existing policy.
+
+All priorities obey the total active-job cap. Positive priorities win and bypass project caps, but never GPU gates.
+Priority 0 ranks projects by fewer active tasks, then oldest successful admission, then job ID. Negative priorities
+rank later and still obey project caps. Successful claims atomically persist turns across restarts; dry runs/failed
+claims do not advance turns, but a launcher failure after claiming does.
+Competing projects have active or dependency-ready priority<=0 tasks. With total cap N>0, each project cap tightens
+to ceil(N/competing projects). A alone with project cap 2 and total cap 2 can run A+A; competing A/B get A+B.
+A later B waits for the next free slot without stopping A. Resource-blocked projects retain their share, potentially
+leaving capacity idle; dependency-blocked projects do not participate. Fairness is per queue, not across hosts/users.
+
+scheduling_mode="fifo" / daemon --scheduling fifo restores priority/ID order and ignores project caps, but keeps
+the total cap. `projects --json` shows caps, active/pending counts and last admission turns.

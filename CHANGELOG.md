@@ -6,6 +6,14 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ### English
 
+- Render `show` text/JSON and `list --json` timestamps in the CLI host’s local timezone with explicit offsets; keep UTC storage/logs.
+
+- Add unified SSH commands, incremental content-addressed uploads and isolated task snapshots,
+  reusable remote Python environments and model caches, explicit checkpoint inclusion, and detached daemon startup.
+- Default to fair project admission with persisted turns and configurable project/total concurrency caps.
+  Positive priorities retain precedence; running tasks are not preempted. Keep legacy FIFO as an option.
+- Preserve all settings during daemon CLI overrides and scan all active jobs when enforcing concurrency/reservations.
+
 - Support single-node multi-GPU jobs with `--gpus N` / `--gpu-count N`, atomic
   group assignment, per-card reservations and OOM learning, and distributed-rank
   memory sampling. Existing jobs and submissions remain single-GPU by default.
@@ -17,6 +25,14 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 - Prevent backfill onto a GPU with an active exclusive queue job.
 
 ### 中文
+
+- `show` 文本/JSON 和 `list --json` 时间按 CLI 所在主机本地时区显示并带 offset；存储/日志保持 UTC。
+
+- 新增统一 SSH 调用、按内容增量上传与独立任务快照，复用远程 Python 环境和模型缓存，
+  支持续训 checkpoint 显式传输及后台 daemon 启动。
+- 默认按项目公平分配新启动机会，轮次持久化，可设置项目/总并发上限；正优先级优先，
+  不抢占正在运行的训练，保留原 FIFO 模式。
+- daemon 参数覆盖保留其余配置；并发与资源预留扫描全部活跃任务。
 
 - 新增 `--gpus N` / `--gpu-count N` 支持单机多卡任务，一次领取整组 GPU，按卡预留和
   学习 OOM 显存需求，并采样分布式 rank 的显存。已有任务和默认提交仍使用单卡。

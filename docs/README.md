@@ -8,7 +8,7 @@
 
 gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQLite 持久化，
 `nvidia-smi` 发现设备。支持单机单卡/多卡任务、显存学习、依赖和有界失联恢复。
-它没有服务端 API、前端、分布式控制平面，也不是 Slurm 或安全沙盒。
+它提供 SSH 远程 CLI 与增量代码快照，但没有分布式控制平面，也不是 Slurm 或安全沙盒。
 不同用户的队列互不协调，无法保证外部进程不在启动窗口抢显存。
 
 默认提交是 auto 显存、1 张 GPU；`--gpu 0,1` 限定候选范围，`--gpus 2` 才申请两张。
@@ -20,6 +20,14 @@ gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQL
 ```mermaid
 flowchart LR
   CLI[cli: submit / inspect / cancel] --> DB[(SQLite jobs)]
+  CLI --> SSH[remote: SSH protocol]
+  SSH --> Sync[sync: content cache + task snapshot]
+  Sync --> Env[environment: optional locked venv]
+  Env --> RemoteCLI[remote CLI handler]
+  SSH --> RemoteCLI
+  RemoteCLI --> RemoteDB[(Remote queue DB)]
+  DB --> Fair[project caps + persisted admission turns]
+  Fair --> Scheduler
   Config[config: Settings] --> CLI
   Config --> Scheduler[scheduler: daemon + flock]
   GPU[gpu: nvidia-smi snapshots] --> Scheduler
@@ -32,10 +40,12 @@ flowchart LR
   Runner --> Notify[notify: best-effort external command]
 ```
 
-1. CLI 验证参数、解析命令 argv、把 `Job` 写到数据库；提交本身不启动训练。
+1. 本地 CLI 验证参数后把 `Job` 写入本地 DB。指定 --remote 时先走 SSH，远程默认按内容增量
+   接收代码、创建独立快照并准备可选环境，最后由远程 CLI 写远程 DB；查询/管理不经过同步。
+   远程队列使用同一套 scheduler/runner 链路，提交本身不启动训练。
 2. 每个状态目录一个 daemon，通过 `flock` 防止重复实例。每个 tick 最多启动一个任务，
    已启动任务可以并行。先核对失联进程、采样与峰值，再读取依赖满足的任务。
-3. 调度器按优先级/ID 遍历，按卡扣除队列未兑现预留。所有选中卡稳定合格并通过第二次
+3. 调度器默认在普通任务间按项目活跃数/持久轮次公平排序；显式正优先级优先。按卡扣除队列未兑现预留。所有选中卡稳定合格并通过第二次
    采样后，在一次数据库领取中进入 `starting`；不会先占一部分卡等剩余卡。
 4. daemon 启动独立 runner，写入 `running`。runner 再启动独立 worker 进程组，设置
    `CUDA_VISIBLE_DEVICES`，合并 stdout/stderr 到日志，等待命令退出并记录结果。
@@ -47,6 +57,9 @@ flowchart LR
 默认状态目录 `~/.local/state/gpuq` 内有 `queue.sqlite3`、`logs/`、`gpuqd.lock`；
 默认配置 `~/.config/gpuq/config.toml`。数据库是任务事实来源，内存中稳定窗口不是持久状态。
 路径优先级及一个环境变量例外见 [配置](modules/config.md)。
+项目上限/轮次保存在同库 projects/scheduling_state，重启保留；普通任务默认每项目 1 个。
+远程持久根默认为 ~/.local/share/gpuq/workspaces，包含 job-* 快照、blobs、environments、cache，
+与队列状态目录分离；没有自动清理或产物回传，见 [同步](modules/sync.md) 和 [环境](modules/environment.md)。
 
 | 状态 | 含义与负责模块 |
 |---|---|
@@ -67,6 +80,10 @@ flowchart LR
 | 模块说明 | 覆盖范围 / 应解决的问题 |
 |---|---|
 | [入口](modules/entrypoints.md) | `__init__`、`__main__`、打包入口；Python/二进制怎样调用 CLI 与 runner |
+| [远程 SSH](modules/remote.md) | 请求协议、统一远程调用与失败边界 |
+| [增量同步](modules/sync.md) | 内容缓存、排除规则、独立代码快照 |
+| [远程环境](modules/environment.md) | 依赖锁文件、远程 venv 与模型缓存边界 |
+| [项目识别](modules/projects.md) | 自动根目录识别、稳定项目身份 |
 | [CLI](modules/cli.md) | 命令解析、展示、日志、doctor、命令行覆盖和退出码 |
 | [配置](modules/config.md) | 全部 Settings 默认值、环境变量、路径、配置传播 |
 | [模型](modules/models.md) | Job/GPU 数据契约、单位、JSON 兼容和状态集合 |
@@ -86,7 +103,9 @@ flowchart LR
 
 | 要做什么 | 先读的模块 | 必须一起考虑 |
 |---|---|---|
-| 新增提交参数或 JSON 字段 | [CLI](modules/cli.md)、[模型](modules/models.md) | db 持久化/迁移；用户双语 CLI 手册；CLI 与 DB 测试 |
+| 修改远程提交、传输或环境 | [SSH](modules/remote.md)、[同步](modules/sync.md)、[环境](modules/environment.md) | 协议兼容、隔离快照、缓存复用、双语远程手册 |
+| 修改项目公平性 | [项目识别](modules/projects.md)、[调度器](modules/scheduler.md) | DB 持久轮次、并发限额、优先级、无抢占 |
+| 新增提交参数或 JSON 字段 | [CLI](modules/cli.md)、[模型](modules/models.md) | db 持久化/迁移；远程转发；用户双语 CLI 手册；CLI 与 DB 测试 |
 | 修改选卡、独占或显存策略 | [调度器](modules/scheduler.md)、[GPU](modules/gpu.md) | 第二次检查、队列预留、固定/auto、多卡、两种外部共享策略 |
 | 修改 OOM 或 retry 行为 | [执行器](modules/runner.md)、[数据库](modules/db.md) | 普通失败隔离、auto 无次数上限、fixed 有界、整组释放 |
 | 添加配置项 | [配置](modules/config.md)、[CLI](modules/cli.md) | Settings 加载、CLI 重建 Settings、样例配置、runner 继承环境 |
@@ -118,19 +137,18 @@ python -m build
 
 - `daemon --dry-run` 只禁止领取/启动，并非数据库只读：失联核对、峰值、依赖和
   不可能显存判定仍可能更新状态。用临时队列做诊断实验。
-- 纯 `Job` 对象是快照；进程/取消状态需要重新从 db 读取。`QueueDB.active()` 当前继承
-  `list()` 的 200 条默认上限，不代表无限扫描。
-- `--poll-seconds` 路径重建 Settings，目前遗漏 `exclusive_shared_gpus` 和
-  `max_orphan_retries`，会回到默认值。需要这些设置时用 TOML 的 `poll_seconds`。
+- 纯 `Job` 对象是快照；进程/取消状态需要重新从 db 读取。`active()` 扫描全部活跃任务。
+- daemon 的命令行覆盖使用 dataclasses.replace 保留未覆盖配置。
 - 日志按多次尝试追加；OOM 当前根据末尾 128 KiB 文本识别，旧尝试文本仍可能在尾部。
 - 软件版本、已发布二进制和当前源码能力不能仅由 `0.2.0` 字符串推断；确认安装来源。
-- 时间字符串带 UTC offset；工作区与已提交版本可能有时间显示方式差异。
-  修改文档前检查实际 diff，不将未提交行为描述成已发布保证。
+- 新记录和执行器日志写 UTC；show 文本/JSON 与 list JSON 按 CLI 所在主机本地时区显示并带 offset。
+  旧记录按自身 offset 解读，不自动改写；logs 不重写已有日志文本。
 
 这些是当前实现限制，不是工程承诺。具体上下文和测试覆盖缺口见相应模块。
 
 ## 其他文档与验收
 
+远程使用：[中文](remote_usage.md) / [English](remote_usage.en.md)。
 用户参数：[中文](cli_reference.md) / [English](cli_reference.en.md)。
 调度语义：[中文](scheduling.md) / [English](scheduling.en.md)。
 用户恢复说明：[失联恢复](orphan_recovery.md)。

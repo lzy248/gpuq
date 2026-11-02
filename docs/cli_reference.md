@@ -1,19 +1,30 @@
 # gpuq CLI 参数手册
 
-本文覆盖 `gpuq 0.2.0` 的全部公共命令和参数。
+本文覆盖当前源码的公共命令和参数，包含 Unreleased 功能；已有 `0.2.0` 发行包不一定具备全部能力。
 
 ## 全局参数
 
 全局参数必须写在子命令之前：
 
 ```bash
-gpuq [--state-dir PATH] [--config PATH] SUBCOMMAND ...
+gpuq [--remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
 ```
 
 | 参数 | 含义 | 默认值 |
 |---|---|---|
 | `--state-dir PATH` | SQLite、锁文件和默认日志目录 | `~/.local/state/gpuq` 或 `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML 配置文件 | `~/.config/gpuq/config.toml` 或 `GPUQ_CONFIG` |
+| `--version` | 显示安装版本后退出 | — |
+| `--remote HOST` | SSH 主机/IP/user@host 或本地 profile；后续操作针对远程队列 | 见远程手册 |
+| `--ssh-port N` | 覆盖 SSH 端口 | profile/SSH 默认 |
+| `--ssh-identity PATH` | 本地 SSH 私钥路径 | profile/SSH 默认 |
+| `--remote-command TEXT` | 远程 gpuq 可执行 argv；按 shell 引号规则拆分 | 见远程手册 |
+| `--remote-config PATH` | 远程 TOML 配置路径 | 见远程手册 |
+| `--remote-workdir PATH` | 远程持久工作区/缓存根目录 | 见远程手册 |
+
+远程模式中 `--config` 读取本地连接 profile，`--remote-config` 选择远程配置，`--state-dir` 指远程状态目录。
+默认工作区为 `~/.local/share/gpuq/workspaces`；SSH 选项仅适用于 `--remote`。
+完整 profile 字段、优先顺序和默认命令见[远程使用](remote_usage.md)。
 
 ## `gpuq init`
 
@@ -36,7 +47,7 @@ gpuq submit [OPTIONS] -- COMMAND [ARGUMENTS...]
 
 | 参数 | 必填 | 含义 |
 |---|---:|---|
-| `--memory-mb N|auto` / `--memory N|auto` | 否 | 固定峰值（MB）或自动学习；默认 `auto` |
+| `--memory-mb N\|auto` / `--memory N\|auto` | 否 | 固定峰值（MB）或自动学习；默认 `auto` |
 | `--reserve-mb N` / `--reserve N` | 否 | 额外留给竞态、驱动波动和估计误差的显存；默认 1024MB |
 | `--gpu LIST` | 否 | 允许使用的物理 GPU，如 `--gpu 1`、`--gpu 0,1`；可重复；省略表示任意卡 |
 | `--gpus N` / `--gpu-count N` | 否 | 同一任务同时使用的本机 GPU 数量；正整数，默认 1 |
@@ -67,7 +78,9 @@ gpuq 只启动一次命令，并将全部已分配的物理编号按升序放入
 
 | 参数 | 默认值 | 含义 |
 |---|---:|---|
-| `--priority N` | `0` | 越大越优先；相同优先级按较早 job ID |
+| `--project ID` | 自动根目录 | 显式项目身份；远程快照默认使用稳定源身份 |
+| `--project-limit N` | 新项目默认 1 | 持久设置项目普通任务并发上限；省略保留已有设置，竞争时还受公平份额约束 |
+| `--priority N` | `0` | 越大越优先；默认 0 在项目间公平轮转，同项目按较早 job ID |
 | `--after JOB_ID` | 无 | 只有依赖任务 `completed` 后才能运行；失败/取消会令子任务 `blocked_dependency` |
 | `--max-retries N` | `0` | 初次尝试之外允许的自动重试次数 |
 | `--retry-on-oom` | 关闭 | 仅检测到 OOM 时自动增加显存估计并重排 |
@@ -92,6 +105,20 @@ gpuq 只启动一次命令，并将全部已分配的物理编号按升序放入
 | `--env KEY=VALUE` | 无 | 添加或覆盖环境变量；可重复 |
 | `--log PATH` | 状态目录下自动命名 | 合并 stdout/stderr 的日志文件 |
 | `--no-notify` | 关闭 | 禁止该任务的完成、失败、取消和 OOM 通知 |
+
+### 远程提交与同步参数
+
+仅适用于 `--remote`。默认增量同步代码并创建独立快照；模型权重默认排除，缓存留在远程。
+
+| 参数 | 含义 |
+|---|---|
+| `--no-sync` | 使用已有远程 checkout，必须指定 --remote-cwd 或 profile.cwd |
+| `--remote-cwd PATH` | 已有远程工作目录；要求 --no-sync |
+| `--sync-exclude GLOB` | 追加排除规则，可重复 |
+| `--sync-include PATH` | 显式包含项目内相对文件/目录（如 checkpoint），覆盖忽略规则；可重复 |
+| `--sync-preview` | 只查看本地选中文件，不连接远程 |
+
+`--no-sync` 不可与 include/exclude 合用。环境锁文件、缓存、排除清单及续训示例见[远程手册](remote_usage.md)。
 
 ### 示例
 
@@ -170,6 +197,10 @@ gpuq list --limit 1000 --json
 
 ## `gpuq show JOB_ID`
 
+文本中的 created_at/updated_at/started_at/finished_at 转换为 CLI 所在主机本地时区并保留 offset；
+`--remote` 使用远程主机时区。`show --json` 和 `list --json` 同样输出本地时间并带 offset，数据库新记录仍统一写 UTC。
+历史无时区或无法解析的值原样显示；`logs` 不转换日志文本。
+
 显示命令、资源、PID、物理 GPU、尝试次数、峰值显存、时间和失败原因。
 
 ```bash
@@ -222,7 +253,7 @@ gpuq retry 21 --memory auto
 
 | 参数 | 含义 |
 |---|---|
-| `--memory-mb N|auto` / `--memory N|auto` | 覆盖估计，或重置为新的 auto 探测 |
+| `--memory-mb N\|auto` / `--memory N\|auto` | 覆盖估计，或重置为新的 auto 探测 |
 | `--reset-attempts` | 将历史 attempt 计数清零 |
 
 ## `gpuq priority JOB_ID VALUE`
@@ -259,6 +290,9 @@ gpuq daemon --once --dry-run
 | 参数 | 含义 |
 |---|---|
 | `--poll-seconds N` | 覆盖配置中的采样间隔 |
+| `--max-running-jobs N` | 总活跃任务上限，0 不限制；所有优先级都遵守 |
+| `--scheduling fair` / `--scheduling fifo` | fair 默认项目轮转；fifo 恢复优先级/ID 顺序并忽略项目限额 |
+| `--background` | 显式后台启动；已有 daemon 保留原配置；不可与 once/dry-run 合用 |
 | `--once` | 只执行一个调度周期 |
 | `--dry-run` | 运行采样和判定但不启动任务；稳定计数只存在于当前 daemon 进程内 |
 
@@ -270,6 +304,16 @@ gpuq daemon --once --dry-run
 
 安装后还会提供等价入口 `gpuqd`，例如 `gpuqd --poll-seconds 5`；它等价于
 `gpuq daemon --poll-seconds 5`。
+
+## `gpuq projects`
+
+查看项目身份、并发限制、活跃/待运行任务数和上次分配轮次；JSON 字段为
+`project_id`、`concurrency_limit`、`active`、`pending`、`last_served`。
+
+```bash
+gpuq projects --json
+gpuq --remote train projects --json
+```
 
 ## `gpuq doctor`
 
@@ -301,6 +345,9 @@ gpuq doctor
 [gpuq]
 state_dir = "~/.local/state/gpuq"
 poll_seconds = 10
+scheduling_mode = "fair"
+max_running_jobs = 0
+default_project_limit = 1
 default_reserve_mb = 1024
 default_stable_samples = 3
 auto_probe_hold_seconds = 300
@@ -317,6 +364,9 @@ notify_command = ["notify-send", "{title}", "{message}"]
 |---|---|
 | `state_dir` | 数据库、锁与默认日志目录 |
 | `poll_seconds` | daemon 采样间隔 |
+| `scheduling_mode` | 默认 fair；fifo 为原优先级/ID 顺序 |
+| `max_running_jobs` | 默认 0 不限总并发；计任务数，不是 GPU 数 |
+| `default_project_limit` | 默认 1；只初始化新项目普通任务并发上限 |
 | `default_reserve_mb` | submit 未指定 reserve 时采用 |
 | `default_stable_samples` | submit 未指定稳定次数时采用 |
 | `auto_probe_hold_seconds` | 首次 auto probe 共享前的最短观察秒数 |
@@ -347,3 +397,12 @@ notify_command = [
 作为一个独立参数传给程序，不经过 shell 展开；脚本内部可接入邮件、企业
 微信、Telegram 或其他 webhook。通知程序启动失败不会影响队列继续运行。
 单个任务可用 `--no-notify` 关闭通知。
+
+## SSH 远程与项目并发
+
+使用 `gpuq --remote user@host ...` 统一提交/查看/取消远程任务，默认增量同步独立代码快照，复用远程模型缓存。
+详见 [远程工作区与环境](remote_usage.md)。`daemon --background` 可显式后台启动。
+
+`submit --project` 覆盖自动项目身份，`--project-limit N` 持久设置项目普通任务并发上限（默认 1）。
+`daemon --max-running-jobs N` 限制所有任务总并发（0 不限制），`--scheduling fair|fifo` 选择项目公平或旧 FIFO。
+总上限 2 时 A 单独可跑 2 个，A/B 竞争分为 1+1；运行任务不暂停。`projects --json` 查看策略与计数。

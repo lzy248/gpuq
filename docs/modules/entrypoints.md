@@ -15,6 +15,7 @@
 |---|---|
 | `gpuq ...` | pyproject 的 `gpuq.cli:main` |
 | `gpuqd ...` | `gpuq.cli:daemon_entrypoint`，把 `daemon` 插到参数最前面 |
+| SSH 内部服务 | `gpuq --gpuq-remote-call`，由 CLI 路由到 [remote](remote.md)；双方必须支持协议 v2 |
 | `python -m gpuq ...` | `__main__.py` 调用 CLI main |
 | Python 安装的内部执行器 | 当前 `sys.executable -m gpuq.runner --state-dir ... --job-id ...` |
 | 冻结二进制的内部执行器 | 当前可执行文件 `--gpuq-internal-runner --state-dir ... --job-id ...` |
@@ -27,6 +28,9 @@
 二进制入口显式导入 CLI 和 runner，让 PyInstaller 发现二者。只有第一个参数为
 `--gpuq-internal-runner` 时移除该参数后进入 runner，否则走普通 CLI。
 不能让冻结程序去调用 `python -m gpuq.runner`，目标机器可能没有 Python。
+SSH 内部请求只有 argv 恰好为 [--gpuq-remote-call] 时由 CLI 分流；其数据来自 stdin，
+不是 runner 入口。后台启动在 Python 安装中使用 sys.executable -m gpuq，在冻结程序中
+直接使用当前二进制，均传入 state/config 与 daemon 覆盖参数。管理依赖环境另需远程 Python/venv。
 
 ## 失败与限制
 

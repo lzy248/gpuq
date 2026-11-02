@@ -17,7 +17,7 @@
 |---|---|
 | pyproject.toml | setuptools>=77，发行包名 personal-gpuq、导入名 gpuq；Python>=3.10；3.10 需 tomli；dev 包含 pytest/build/pytest-cov/Ruff 0.16.6；binary 包含 PyInstaller |
 | MANIFEST.in | sdist 包含工程文档、AGENTS、检查器、测试及 fixtures、文档引用的配置/脚本/资产；wheel 仍以运行时包为主 |
-| config.example.toml | 常用 [gpuq] 设置与 notify_command argv 示例，不是所有 Settings 字段全集 |
+| config.example.toml | [gpuq] 的 fair/总并发/项目初始上限、资源及通知示例；本地 [remotes.train] 连接/环境样例；非全部字段全集 |
 | scripts/build_binary.sh | PYTHON 默认 python3，GPUQ_BINARY_ARCH 默认 linux-x86_64；PyInstaller onefile，产物 dist/gpuq 和带版本 tar.gz/sha256 |
 | systemd/gpuqd.service | 用户服务 ExecStart=%h/.local/bin/gpuq daemon；Restart=on-failure、5 秒；KillMode=process；PYTHONUNBUFFERED=1 |
 | .github/workflows/ci.yml | main push、PR、手动触发；Python 3.10/3.11/3.12 lint/test；Python 3.12 包构建；文档检查在测试矩阵中执行 |
@@ -44,6 +44,12 @@ Python 包：`python -m build` 生成 sdist/wheel。
 安装用户服务时复制 unit 到 ~/.config/systemd/user，daemon-reload 后 enable --now。
 自定义安装位置需改 ExecStart。KillMode=process 让只重启 daemon 不杀独立 runner/worker；
 更新调度功能后应重启 daemon 才使用新代码。正式安装命令见双语 README。
+
+远程部署需两端安装兼容协议的 gpuq，并准备 OpenSSH 密钥/主机验证。
+--remote-command/profile.command 指定远程可执行文件，不自动部署或升级远端。
+`daemon --background` 可显式启动脱离 SSH 的服务，日志在 state_dir/daemon.log；已有 flock
+实例保留旧配置。使用 systemd 时仍由 systemd 管理，后台入口不接管/重启已有服务。
+远程代码、环境与模型缓存位置和清理限制见 [远程手册](../remote_usage.md)。
 
 ## 失败与限制
 

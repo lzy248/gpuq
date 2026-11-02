@@ -42,7 +42,8 @@
     {
       "doc": "docs/modules/scheduler.md",
       "files": [
-        "src/gpuq/scheduler.py"
+        "src/gpuq/scheduler.py",
+        "src/gpuq/background.py"
       ]
     },
     {
@@ -75,7 +76,10 @@
         "tests/test_orphan_recovery.py",
         "tests/test_runner.py",
         "tests/test_scheduler.py",
-        "tests/test_docs.py"
+        "tests/test_docs.py",
+        "tests/test_projects.py",
+        "tests/test_remote.py",
+        "tests/test_environment.py"
       ]
     },
     {
@@ -101,6 +105,30 @@
       "files": [
         "docs/module-map.json",
         "scripts/check_docs.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/remote.md",
+      "files": [
+        "src/gpuq/remote.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/sync.md",
+      "files": [
+        "src/gpuq/sync.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/environment.md",
+      "files": [
+        "src/gpuq/environment.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/projects.md",
+      "files": [
+        "src/gpuq/projects.py"
       ]
     }
   ]

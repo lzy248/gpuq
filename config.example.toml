@@ -1,4 +1,8 @@
 [gpuq]
+# Project admission: fair (default) or legacy fifo. Counts tasks, not GPUs.
+scheduling_mode = "fair"
+max_running_jobs = 0  # 0 = no total cap; use 2 for A+B across competing projects
+default_project_limit = 1  # initial ordinary-task cap for new projects
 state_dir = "~/.local/state/gpuq"
 poll_seconds = 10
 default_reserve_mb = 1024
@@ -9,3 +13,14 @@ nvidia_smi = "nvidia-smi"
 
 # 每个参数独立成一个数组元素。支持 {title}、{message}、{job_id}。
 # notify_command = ["notify-send", "{title}", "{message}"]
+
+# Optional local SSH profile. Both hosts need compatible gpuq versions.
+# [remotes.train]
+# host = "user@gpu-server"
+# command = ["~/.local/bin/gpuq"]
+# work_dir = "~/.local/share/gpuq/workspaces"
+# python = "/opt/conda/envs/train/bin/python"
+# requirements = "requirements.lock"  # optional self-contained hashed pip lock
+# config = "~/.config/gpuq/config.toml"
+# state_dir = "~/.local/state/gpuq"
+# cwd = "/srv/project"  # --no-sync only

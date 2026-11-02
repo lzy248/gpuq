@@ -10,7 +10,10 @@ from gpuq.db import QueueDB
 
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
-    return Settings(state_dir=tmp_path, poll_seconds=0.01, default_reserve_mb=512)
+    # Resource-policy tests isolate GPU behavior from project admission limits.
+    # Dedicated fairness tests explicitly opt into the production default, fair.
+    return Settings(state_dir=tmp_path, poll_seconds=0.01, default_reserve_mb=512,
+                    scheduling_mode="fifo")
 
 
 @pytest.fixture

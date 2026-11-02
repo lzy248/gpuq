@@ -19,7 +19,7 @@ utilization_percent, temperature_c, processes=())`；compute_process_count 为�
 
 | Job 字段组 | 字段及约定 |
 |---|---|
-| 身份/命令 | id, name, command（argv tuple）, cwd, env |
+| 身份/命令 | id, name, command（argv tuple）, cwd, env, project_id（稳定字符串，JSON 同名） |
 | 选卡 | gpu_allowlist（None 表示任意）, gpu_count（默认 1） |
 | 每卡资源 | memory_mb（正数）, memory_mode（fixed/auto）, reserve_mb, max_utilization, stable_samples, exclusive |
 | 队列 | priority, status, dependency_id |
@@ -39,7 +39,12 @@ utilization_percent, temperature_c, processes=())`；compute_process_count 为�
 同卡已有任务的最大 reserve 和未兑现预留。
 `is_auto_memory` 检查 mode；`is_uncalibrated_auto_probe` 同时要求 auto、oom_count=0、memory_mb=1。
 `as_dict()` 返回 JSON 友好字典：command/allowlist/assigned_gpus 转 list；空分配是 `[]`；
-JSON 编码会把按 GPU 索引的 dict 键变为字符串。
+JSON 编码会把按 GPU 索引的 dict 键变为字符串。模型 as_dict 保留原始时间字符串；
+CLI 在副本中把 show/list 输出时间转成本地时区，不改动 Job 或数据库。
+
+project_id 在 dataclass 中默认空字符串仅用于构造兼容，正常 DB 提交会推导/校验非空身份。
+它不是必须存在的路径（显式 ID 或远程 hostname:root 都合法）；项目并发策略不存到 Job，
+由 projects 表按身份共享。JSON 增加 project_id，retry/恢复保留它，见 [项目识别](projects.md)。
 
 JobStatus 的值为 queued、waiting_memory、starting、running、retry_wait、completed、failed、
 cancelled、blocked_dependency。后四项属于 TERMINAL_STATUSES，详见 [状态转换](db.md)。

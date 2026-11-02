@@ -2,7 +2,7 @@
 
 [返回工程总览](../README.md) · [工程规范](../../AGENTS.md)
 
-覆盖文件：[tests/conftest.py](../../tests/conftest.py)、[tests/test_cli.py](../../tests/test_cli.py)、[tests/test_db.py](../../tests/test_db.py)、[tests/test_exclusive_external_sharing.py](../../tests/test_exclusive_external_sharing.py)、[tests/test_gpu.py](../../tests/test_gpu.py)、[tests/test_multigpu.py](../../tests/test_multigpu.py)、[tests/test_orphan_recovery.py](../../tests/test_orphan_recovery.py)、[tests/test_runner.py](../../tests/test_runner.py)、[tests/test_scheduler.py](../../tests/test_scheduler.py)、[tests/test_docs.py](../../tests/test_docs.py)。
+覆盖文件：[tests/conftest.py](../../tests/conftest.py)、[tests/test_cli.py](../../tests/test_cli.py)、[tests/test_db.py](../../tests/test_db.py)、[tests/test_exclusive_external_sharing.py](../../tests/test_exclusive_external_sharing.py)、[tests/test_gpu.py](../../tests/test_gpu.py)、[tests/test_multigpu.py](../../tests/test_multigpu.py)、[tests/test_orphan_recovery.py](../../tests/test_orphan_recovery.py)、[tests/test_runner.py](../../tests/test_runner.py)、[tests/test_scheduler.py](../../tests/test_scheduler.py)、[tests/test_docs.py](../../tests/test_docs.py)、[tests/test_projects.py](../../tests/test_projects.py)、[tests/test_remote.py](../../tests/test_remote.py)、[tests/test_environment.py](../../tests/test_environment.py)。
 
 ## 职责与边界
 
@@ -15,7 +15,7 @@ pytest 验证队列契约，全部自动测试应能在没有物理 GPU 的 Linu
 | 文件 | 覆盖内容 / 修改入口 |
 |---|---|
 | conftest.py | 临时 Settings/QueueDB；submit_job 工厂，默认 fixed=4000MB+1000MB reserve、stable=2、notify=False |
-| test_cli.py | 参数别名、默认 auto、提交/JSON、init、TTY 分页、日志 tail/follow 和 Ctrl-C |
+| test_cli.py | UTC 存储与 show/list 文本与 JSON 本地时区显示及原记录不变、参数别名、默认 auto、提交/JSON、init、TTY 分页、日志 tail/follow 和 Ctrl-C |
 | test_db.py | 序列化、优先级、依赖、迁移、终态 retry、auto 校准、带条件失联更新 |
 | test_gpu.py | nvidia-smi CSV 样本和空进程输出 |
 | test_scheduler.py | FakeBackend/FakeClock/gpu/mark_running 辅助；稳定、资源门槛、选卡、预留、auto 释放、独占、OOM 容量、入口和 systemd |
@@ -23,6 +23,9 @@ pytest 验证队列契约，全部自动测试应能在没有物理 GPU 的 Linu
 | test_orphan_recovery.py | 有界持久计数、旧 boot/PID 复用、存活 worker、取消/终态不重排、配置 |
 | test_runner.py | 真实 CPU worker 的环境/日志/退出、OOM 解析/学习/有界重试、普通失败、取消 |
 | test_multigpu.py | 整组领取、逐卡复查/预留、旧单卡迁移、JSON、恢复、独立 session rank 的环境/显存/取消 |
+| test_projects.py | 项目限额/轮次、单项目2与多项目1+1、旧库迁移、OOM身份保留、配置校验 |
+| test_remote.py | 假 SSH 的真实 CLI 双端协议、增量/隔离/checkpoint、路径/命令、后台 daemon、环境复用 |
+| test_environment.py | 环境身份/失败清理、锁复用与真实离线空锁 venv/pip |
 | test_docs.py | 文档检查器正向路径与缺归属、坏链接/锚点、遗漏章节、重复归属、孤立文档的拒绝路径 |
 
 ## 关键流程与不变量
@@ -44,10 +47,19 @@ process_memory_mb 可返回 None。FakeClock.advance 推进单调时间，不为
 GPU CSV、通知交付、取消竞态及日志跨 attempt 的覆盖不能仅从测试绿灯推断完整。
 受限容器若禁止进程/信号或 /proc 访问，应报告环境限制，不能宣称硬件行为已验证。
 
+新增测试文件：[tests/test_projects.py](../../tests/test_projects.py) 验证项目限额、总并发、轮次重启、
+迁移与配置保留；[tests/test_remote.py](../../tests/test_remote.py) 用真实 CLI 子进程和本地假 SSH
+验证协议、增量去重、隔离、checkpoint、命令转义和远程管理；
+[tests/test_environment.py](../../tests/test_environment.py) 验证环境身份、复用、失败清理、后台锁，
+并用空锁文件执行离线真实 venv/pip 测试。没有真实远程 SSH、GPU/HF 下载验证。
+资源历史测试 fixture 显式 fifo，公平测试另启 fair，避免隐藏原有资源策略断言。
+
 ## 修改与验证
 
 | 修改区域 | 最小针对性命令 |
 |---|---|
+| 项目公平/限额/迁移 | `pytest tests/test_projects.py` |
+| SSH/同步/后台/环境 | `pytest tests/test_remote.py tests/test_environment.py` |
 | CLI/配置/输出 | `pytest tests/test_cli.py tests/test_exclusive_external_sharing.py tests/test_orphan_recovery.py` |
 | 数据/状态 | `pytest tests/test_db.py tests/test_orphan_recovery.py tests/test_multigpu.py` |
 | 调度/显存 | `pytest tests/test_scheduler.py tests/test_exclusive_external_sharing.py tests/test_multigpu.py` |

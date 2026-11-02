@@ -88,6 +88,7 @@ class Job:
     started_at: str | None
     finished_at: str | None
     gpu_count: int = 1
+    project_id: str = ""
     assigned_gpus: tuple[int, ...] = ()
     launch_free_memory_by_gpu: dict[int, int] = field(default_factory=dict)
 
@@ -112,6 +113,7 @@ class Job:
             "env": dict(self.env),
             "gpu_allowlist": list(self.gpu_allowlist) if self.gpu_allowlist else None,
             "gpu_count": self.gpu_count,
+            "project_id": self.project_id,
             "assigned_gpus": list(self.assigned_gpus),
             "launch_free_memory_by_gpu": dict(self.launch_free_memory_by_gpu),
             "memory_mb": self.memory_mb,

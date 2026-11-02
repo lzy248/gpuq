@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 import fcntl
@@ -381,6 +382,7 @@ class Scheduler:
         self.refresh_peaks(states)
         jobs = self.db.runnable()
         jobs = self.fail_impossible_auto_jobs(jobs, states)
+        jobs = self.order_projects(jobs)
         decisions = self.decisions(jobs, states)
         if not decisions:
             if not dry_run:
@@ -429,6 +431,44 @@ class Scheduler:
             raise
         self.stability = {key: 0 for key in self.stability}
         return decision
+
+    def order_projects(self, jobs: list[Job]) -> list[Job]:
+        """Filter/sort dependency-ready jobs for the next launch without writing DB.
+
+        Count all active jobs against the total cap. In fair mode, nonpositive
+        priorities also obey stored project caps, tightened to ceil(total/projects)
+        when a total cap exists. Priority-zero ties favor fewer active jobs, then
+        older persisted turns, then ID. Positive priorities bypass only project
+        caps; FIFO bypasses project fairness, never the total or GPU resource gates.
+        Resource-blocked projects still compete for shares. Existing jobs are not
+        paused; only a later successful DB claim advances a project's turn.
+        """
+        active = self.db.active()
+        total_limit = self.settings.max_running_jobs
+        if total_limit and len(active) >= total_limit:
+            return []
+        if self.settings.scheduling_mode == "fifo":
+            return jobs
+        counts = Counter(job.project_id for job in active)
+        competing = {job.project_id for job in [*active, *jobs] if job.priority <= 0}
+        share = (
+            max(1, (total_limit + len(competing) - 1) // len(competing))
+            if total_limit and competing else None
+        )
+        policies = self.db.project_policies()
+        eligible = []
+        for job in jobs:
+            limit, _ = policies[job.project_id]
+            if share is not None:
+                limit = min(limit, share)
+            if job.priority > 0 or counts[job.project_id] < limit:
+                eligible.append(job)
+        return sorted(eligible, key=lambda job: (
+            -job.priority,
+            counts[job.project_id] if job.priority == 0 else 0,
+            policies[job.project_id][1] if job.priority == 0 else 0,
+            job.id,
+        ))
 
     def _launch(self, job: Job, gpu_index: int) -> None:
         environment = os.environ.copy()

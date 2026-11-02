@@ -2,14 +2,14 @@
 
 [简体中文](cli_reference.md) · English
 
-This document covers the public CLI in `gpuq 0.2.0`.
+This document covers the current source CLI, including Unreleased features; existing `0.2.0` releases may not include every capability.
 
 ## Global syntax
 
 Global options must precede the subcommand:
 
 ```bash
-gpuq [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
+gpuq [--remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
 ```
 
 | Option | Meaning | Default |
@@ -17,6 +17,16 @@ gpuq [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
 | `--state-dir PATH` | SQLite, lock, and default log directory | `~/.local/state/gpuq` or `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML configuration | `~/.config/gpuq/config.toml` or `GPUQ_CONFIG` |
 | `--version` | Print the installed version and exit | — |
+| `--remote HOST` | SSH host/IP/user@host or local profile; operations target that remote queue | See remote guide |
+| `--ssh-port N` | Override SSH port | Profile / OpenSSH defaults |
+| `--ssh-identity PATH` | Local SSH identity file | Profile / OpenSSH defaults |
+| `--remote-command TEXT` | Remote gpuq executable argv, parsed with shell quoting | See remote guide |
+| `--remote-config PATH` | Remote TOML configuration path | See remote guide |
+| `--remote-workdir PATH` | Remote persistent workspace/cache root | See remote guide |
+
+In remote mode, `--config` reads local connection profiles, `--remote-config` selects remote configuration,
+and `--state-dir` refers to remote state. The default workspace is `~/.local/share/gpuq/workspaces`.
+SSH options require `--remote`. See [remote use](remote_usage.en.md) for profile fields, precedence and executable defaults.
 
 ## `gpuq init`
 
@@ -40,7 +50,7 @@ The `--` separator keeps training arguments from being parsed as gpuq options.
 
 | Option | Required | Meaning |
 |---|---:|---|
-| `--memory-mb N|auto` / `--memory N|auto` | No | Fixed job peak in MB or automatic learning; default `auto` |
+| `--memory-mb N\|auto` / `--memory N\|auto` | No | Fixed job peak in MB or automatic learning; default `auto` |
 | `--reserve-mb N` / `--reserve N` | No | Additional launch-race and estimation margin; config default is 1024 MB |
 | `--gpu LIST` | No | Eligible physical GPU IDs, e.g. `--gpu 1` or `--gpu 0,1`; repeatable |
 | `--gpus N` / `--gpu-count N` | No | GPUs used simultaneously by this job on one host; positive integer, default 1 |
@@ -74,6 +84,8 @@ The legacy JSON field `assigned_gpu` remains the first assigned GPU.
 
 | Option | Default | Meaning |
 |---|---:|---|
+| `--project ID` | Detected root | Explicit project identity; remote snapshots default to stable source identity |
+| `--project-limit N` | New projects: 1 | Persist ordinary-job concurrency cap; omission retains policy, competing projects also obey fair shares |
 | `--priority N` | `0` | Higher values are considered first |
 | `--after JOB_ID` | None | Run only after the dependency completes successfully |
 | `--max-retries N` | `0` | Extra OOM attempts in fixed mode; ignored by auto mode |
@@ -99,6 +111,20 @@ the new scheduler. Existing database rows migrate automatically as single-GPU jo
 | `--env KEY=VALUE` | None | Add or override an environment variable; repeatable |
 | `--log PATH` | Auto path under `logs/` | Combined stdout/stderr |
 | `--no-notify` | Off | Disable notifications for this job |
+
+### Remote submission and sync options
+
+Require `--remote`. Default: incremental upload and isolated code snapshots; model weights are excluded and caches remain remote.
+
+| Option | Meaning |
+|---|---|
+| `--no-sync` | Use existing remote checkout; requires --remote-cwd or profile.cwd |
+| `--remote-cwd PATH` | Existing remote working directory; requires --no-sync |
+| `--sync-exclude GLOB` | Additional exclusion glob; repeatable |
+| `--sync-include PATH` | Explicit project-relative file/directory, e.g. checkpoint; overrides ignore rules; repeatable |
+| `--sync-preview` | List selected local files without connecting |
+
+`--no-sync` cannot be combined with include/exclude. See [remote use](remote_usage.en.md) for lockfiles, caches, exclusions and resume examples.
 
 ### Examples
 
@@ -162,6 +188,10 @@ and `--no-pager` always produce a static noninteractive listing.
 
 ## `gpuq show JOB_ID`
 
+Text timestamps (created_at/updated_at/started_at/finished_at) use the CLI host’s local timezone with an explicit offset;
+`--remote` uses the remote host’s timezone. `show --json` and `list --json` also output local timestamps with explicit offsets; database writes still use UTC.
+Naive or invalid legacy values are displayed unchanged. `logs` does not rewrite log timestamps.
+
 Displays command, resource mode, learned memory, GPU, PIDs, attempts, peak memory,
 timestamps, and failure details.
 
@@ -212,7 +242,7 @@ gpuq retry 21 --memory auto
 
 | Option | Meaning |
 |---|---|
-| `--memory-mb N|auto` / `--memory N|auto` | Replace the estimate or reset to a fresh auto probe |
+| `--memory-mb N\|auto` / `--memory N\|auto` | Replace the estimate or reset to a fresh auto probe |
 | `--reset-attempts` | Reset the displayed attempt counter |
 
 ## `gpuq priority JOB_ID VALUE`
@@ -243,8 +273,27 @@ gpuq daemon --once
 gpuq daemon --once --dry-run
 ```
 
+| Option | Meaning |
+|---|---|
+| `--poll-seconds N` | Override sampling interval |
+| `--once` | Run one scheduling tick |
+| `--dry-run` | Sample and decide without launching; not a read-only operation |
+| `--max-running-jobs N` | Total active-job cap; 0 means unlimited; applies to every priority |
+| `--scheduling fair` / `--scheduling fifo` | Default fair project admission; fifo uses priority/ID order without project caps |
+| `--background` | Detached startup; existing daemon retains settings; incompatible with once/dry-run |
+
 Only one daemon may lock a state directory. `--once` creates a new scheduler process,
 so three separate `--once` calls do not accumulate a `stable_samples=3` window.
+
+## `gpuq projects`
+
+Inspect project identity, concurrency caps, active/pending counts and last admission turn. JSON fields:
+`project_id`, `concurrency_limit`, `active`, `pending`, `last_served`.
+
+```bash
+gpuq projects --json
+gpuq --remote train projects --json
+```
 
 ## `gpuq doctor`
 
@@ -274,6 +323,9 @@ gpuq doctor
 [gpuq]
 state_dir = "~/.local/state/gpuq"
 poll_seconds = 10
+scheduling_mode = "fair"
+max_running_jobs = 0
+default_project_limit = 1
 default_reserve_mb = 1024
 default_stable_samples = 3
 auto_probe_hold_seconds = 300
@@ -286,7 +338,24 @@ nvidia_smi = "nvidia-smi"
 notify_command = ["notify-send", "{title}", "{message}"]
 ```
 
+
+| Setting | Default / meaning |
+|---|---|
+| `scheduling_mode` | fair; fifo restores priority/ID ordering |
+| `max_running_jobs` | 0, unlimited total concurrency; counts jobs, not GPUs |
+| `default_project_limit` | 1; initializes ordinary-job caps for new projects only |
+
 `notify_command` is an argument array, not a shell string. It may interpolate
 `{title}`, `{message}`, and `{job_id}`. Notification failure never changes job state.
 
 See [Scheduling semantics and safety](scheduling.en.md) for exact resource decisions.
+
+## SSH remotes and project concurrency
+
+Use `gpuq --remote user@host ...` to submit, inspect and cancel remote tasks with incremental isolated code
+snapshots and persistent remote model caches. See [remote workspaces and environments](remote_usage.en.md).
+`daemon --background` explicitly starts a detached daemon.
+
+`submit --project` overrides automatic project identity; `--project-limit N` persists the ordinary project cap (default 1).
+`daemon --max-running-jobs N` caps all active jobs (0 means unlimited); `--scheduling fair|fifo` selects fair projects or legacy FIFO.
+With total cap 2, A alone may run 2 tasks; competing A/B get 1+1 without pausing running tasks. Inspect with `projects --json`.

@@ -21,6 +21,8 @@ job_id 外键、recovery 序号、recovered_at（UTC ISO）、previous_attempt�
 limit<=0 直接 False；否则同一 BEGIN IMMEDIATE 事务中懒建审计表、读任务、查计数。
 仅 starting/running、未请求取消、计数<limit 的记录可重排。清完整 GPU 分配、各类 PID、
 结果/错误及 started_at/finished_at，保留命令、资源、依赖、优先级、显存学习和 attempt。
+project_id、cwd、env 和项目策略/轮次保持原值，下一次领取才推进轮次。远程任务恢复继续使用
+原快照与环境，不同步最新本地代码；相应目录必须仍存在。
 一次 queued 更新与一条恢复审计一起提交，不经过临时 failed，避免依赖任务误判父任务失败。
 
 scheduler 首先判断更新时间是否早于 Linux boot time；不是旧启动记录且 runner 或 worker

@@ -39,7 +39,7 @@ to keep code and documentation in sync.
 - installing a root-level service or taking control of other users' processes is not an option.
 
 Use Slurm, Kubernetes, or another managed scheduler instead when you need multi-node
-jobs, cross-user quotas, fair-share scheduling, accounting, hard reservations,
+jobs, cross-user quotas, cluster-wide fair-share scheduling, accounting, hard reservations,
 preemption, or administrative resource isolation.
 
 ## gpuq vs. Slurm
@@ -51,7 +51,7 @@ preemption, or administrative resource isolation.
 | Authority | Observes free VRAM and launches when it fits | Allocates and enforces resources |
 | Other users | Never kills or pauses their processes | Coordinates all enrolled jobs |
 | Partial GPUs | Backfills leftover VRAM | Usually allocates configured GPU resources |
-| Fairness / quotas / accounting | Intentionally absent | Core functionality |
+| Fairness / quotas / accounting | Fair project admission within a queue; no cross-user quotas/accounting | Cluster-wide capabilities |
 | Multi-node / distributed allocation | Not supported | Supported |
 | Best fit | Unmanaged shared GPU servers | Managed clusters |
 
@@ -60,6 +60,9 @@ check. It reduces that race with stable samples, a launch-time recheck, safety r
 and OOM learning; it cannot provide Slurm's hard guarantees.
 
 ## Highlights
+
+- **Unified SSH remotes.** Submit, inspect and cancel remotely with incremental isolated snapshots and persistent environments/model caches; see [remote use](docs/remote_usage.en.md).
+- **Fair project admission.** Ordinary jobs rotate across projects with configurable project/total caps, explicit priorities and no preemption; see [scheduling](docs/scheduling.en.md).
 
 - **Auto VRAM mode by default.** Submit without estimating memory; recognizable
   CUDA/HIP OOMs teach the queue a higher minimum and retry without a count limit.
@@ -306,3 +309,13 @@ welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow
 ## License
 
 MIT © Liu Zeyang and gpuq contributors. See [LICENSE](LICENSE).
+
+## SSH remotes and project concurrency
+
+Use `gpuq --remote user@host ...` to submit, inspect and cancel remote tasks with incremental isolated code
+snapshots and persistent remote model caches. See [remote workspaces and environments](docs/remote_usage.en.md).
+`daemon --background` explicitly starts a detached daemon.
+
+`submit --project` overrides automatic project identity; `--project-limit N` persists the ordinary project cap (default 1).
+`daemon --max-running-jobs N` caps all active jobs (0 means unlimited); `--scheduling fair|fifo` selects fair projects or legacy FIFO.
+With total cap 2, A alone may run 2 tasks; competing A/B get 1+1 without pausing running tasks. Inspect with `projects --json`.

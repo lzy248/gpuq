@@ -23,9 +23,10 @@
 | submit | 必须有命令；memory>0、reserve>=0、stable>=1、retries>=0；校验 mode、utilization、gpu_count、allowlist 大小和依赖存在 |
 | get | 返回新快照；不存在抛 KeyError |
 | list | active 优先，其后 priority DESC/id ASC；默认最多 200 |
-| active | list 的 starting/running 过滤，仍受默认 200 上限影响 |
+| active | list(limit=None) 的 starting/running 过滤，无 200 条上限 |
 | runnable | **有写入**：先把父任务失败的候选改为 blocked_dependency，再返回父任务完成或无依赖的候选，按 priority DESC/id ASC |
-| claim | 在即时事务中核对完整卡数、唯一性/首卡/allowlist，条件 UPDATE；成功才 attempt+1，返回 bool |
+| claim | 即时事务校验整组分配并条件 UPDATE；成功才 attempt+1，同时推进全局 sequence 和项目 last_served；返回 bool |
+| project_policies | 返回全部项目到 (concurrency_limit,last_served) 的快照；只读，limit 持久化、turn 是序号而非时间 |
 | mark_running / set_worker_pid | 前者仅更新 starting；后者写实际命令 PID |
 | update_peak | MAX 保留历史最高观测，更新 updated_at |
 | finish | 只接受终态值，但 UPDATE 本身不要求旧状态 active；不可用于失联竞争判断 |
@@ -56,7 +57,14 @@ OOM、fail_if_active、fail_impossible_memory、人工 retry、失联恢复清�
 人工 retry 保留 gpu_count/allowlist/命令，按显式 memory_mode 决定是否清学习元数据；
 不自动清 peak，不自动清 started_at；reset_attempts 不重置 orphan_recoveries。
 
-旧库按缺列 ALTER TABLE 迁移：memory_mode、OOM/启动容量字段、gpu_count 和多卡 JSON。
+jobs.project_id 持久保存项目身份；旧库按 cwd 自动回填，旧项目并发初始值 1。
+projects 表保存 concurrency_limit（>0）与 last_served；scheduling_state 保存全局 sequence。
+submit 在同一事务中登记项目，显式 project_limit 才更新已有项目限额。
+成功 claim 同事务递增 sequence 并更新项目 last_served；失败领取或 dry-run 不消费轮次，
+但已领取后的 launcher 失败仍消费轮次。retry、OOM 和失联恢复保留 project_id 与项目策略。
+project_policies 返回项目到 (limit,last_served) 的映射；list(limit=None) 无条数上限。
+
+旧库按缺列 ALTER TABLE 迁移：project_id、memory_mode、OOM/启动容量字段、gpu_count 和多卡 JSON。
 旧记录 gpu_count=1；没有 assigned_gpus_json 时从 assigned_gpu 恢复单元素 tuple。
 事务领取保护的是一条任务的完整状态，不是跨用户 GPU 排他锁；每队列单 daemon 仍必要。
 
@@ -64,14 +72,14 @@ OOM、fail_if_active、fail_impossible_memory、人工 retry、失联恢复清�
 
 所有写入都有文件副作用，runnable 也不是只读查询。不要用真实队列测试迁移。
 finish/requeue_after_oom/set_worker_pid 不是全面的 compare-and-set API；改变取消/完成竞争
-必须增加真实交错测试。active 的 200 条上限限制大队列观察范围。
-时间使用带 offset 的 ISO 字符串；已提交实现由 utcnow 生成 UTC 时间，恢复表也使用 UTC。
-工作区可能有尚未提交的时间显示调整，核实行为时先检查 diff。
+必须增加真实交错测试。active 扫描所有活跃记录以正确计算总并发和预留。
+时间使用带 offset 的 ISO 字符串；utcnow 和恢复模块统一写 UTC。历史记录不改写，
+读取时尊重记录自身的 offset。CLI show 文本/JSON 与 list JSON 转换为运行主机本地时区并保留 offset，转换不写回 DB。
 不要对字符串做时区无关的字典序时间比较。
 
 ## 修改与验证
 
 schema、migrations、_job 和 Job/as_dict 必须同步。新增资源字段逐项核对上面的清理规则，
 检查旧库已有 queued/running 记录，而不只是空库建表。
-运行 `pytest tests/test_db.py tests/test_multigpu.py tests/test_orphan_recovery.py`。
+运行 `pytest tests/test_db.py tests/test_multigpu.py tests/test_orphan_recovery.py tests/test_projects.py`。
 当前迁移测试覆盖旧单卡分配、学习字段和重新打开数据库；修改并发路径需补相应竞争用例。

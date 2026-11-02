@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from dataclasses import replace
 from datetime import datetime
 import json
 import math
@@ -10,6 +11,7 @@ from pathlib import Path
 import re
 import select
 import shlex
+import subprocess
 import sys
 import termios
 import time
@@ -110,7 +112,7 @@ def _job_line(job: Job) -> str:
         resources = f"{job.gpu_count}x{resources}"
     return (
         f"{job.id:5d}  {job.status:18s}  p={job.priority:4d}  gpu={gpu:>2s}  "
-        f"mem={resources:>22s}  try={attempts:>7s}  {job.name}"
+        f"mem={resources:>22s}  try={attempts:>7s}  {job.name}  project={job.project_id}"
     )
 
 
@@ -192,6 +194,9 @@ def command_init(args: argparse.Namespace) -> int:
             "[gpuq]\n"
             f"state_dir = {json.dumps(str(settings.state_dir))}\n"
             "poll_seconds = 10\n"
+            'scheduling_mode = "fair"\n'
+            "max_running_jobs = 0\n"
+            "default_project_limit = 1\n"
             "default_reserve_mb = 1024\n"
             "default_stable_samples = 3\n"
             "auto_probe_hold_seconds = 300\n"
@@ -239,6 +244,9 @@ def command_submit(args: argparse.Namespace) -> int:
         env=_parse_env(args.env),
         gpu_allowlist=_parse_gpus(args.gpu),
         gpu_count=args.gpu_count,
+        project_id=args.project,
+        project_limit=args.project_limit,
+        default_project_limit=settings.default_project_limit,
         memory_mb=memory_mb,
         memory_mode=memory_mode,
         reserve_mb=reserve,
@@ -254,6 +262,7 @@ def command_submit(args: argparse.Namespace) -> int:
     )
     print(f"submitted job {job.id}: {job.name}")
     print(f"command: {shlex.join(job.command)}")
+    print(f"project: {job.project_id}")
     if job.gpu_count > 1:
         print(f"GPUs: {job.gpu_count}; memory and reserve below are per GPU")
     if job.is_auto_memory:
@@ -271,7 +280,7 @@ def command_list(args: argparse.Namespace) -> int:
     _, db = _db(args)
     jobs = db.list(statuses=args.status, limit=args.limit)
     if args.json:
-        print(json.dumps([job.as_dict() for job in jobs], ensure_ascii=False, indent=2))
+        print(json.dumps([_job_display_dict(job) for job in jobs], ensure_ascii=False, indent=2))
         return 0
     if not jobs:
         print("queue is empty")
@@ -290,13 +299,38 @@ def command_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _display_timestamp(value: str | None) -> str | None:
+    """Render an offset-aware stored timestamp in this CLI process's local zone.
+
+    Storage/logs stay untouched. Preserve missing, malformed or naive legacy
+    values rather than guessing their timezone. Remote commands use the remote host timezone.
+    """
+    if value is None:
+        return None
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if timestamp.tzinfo is None:
+        return value
+    return timestamp.astimezone().isoformat()
+
+
+def _job_display_dict(job: Job) -> dict:
+    """Copy a Job for text/JSON display, localizing timestamps without mutating it."""
+    values = job.as_dict()
+    for key in ("created_at", "updated_at", "started_at", "finished_at"):
+        values[key] = _display_timestamp(values[key])
+    return values
+
+
 def command_show(args: argparse.Namespace) -> int:
     _, db = _db(args)
     job = db.get(args.job_id)
     if args.json:
-        print(json.dumps(job.as_dict(), ensure_ascii=False, indent=2))
+        print(json.dumps(_job_display_dict(job), ensure_ascii=False, indent=2))
         return 0
-    for key, value in job.as_dict().items():
+    for key, value in _job_display_dict(job).items():
         if key == "command":
             value = shlex.join(value)
         print(f"{key:20s}: {value}")
@@ -421,23 +455,46 @@ def command_gpus(args: argparse.Namespace) -> int:
 
 def command_daemon(args: argparse.Namespace) -> int:
     settings = _settings(args)
-    if args.poll_seconds is not None:
-        settings = Settings(
-            state_dir=settings.state_dir,
-            poll_seconds=args.poll_seconds,
-            default_reserve_mb=settings.default_reserve_mb,
-            default_stable_samples=settings.default_stable_samples,
-            auto_probe_hold_seconds=settings.auto_probe_hold_seconds,
-            auto_probe_stable_samples=settings.auto_probe_stable_samples,
-            auto_probe_stability_tolerance_mb=(settings.auto_probe_stability_tolerance_mb),
-            auto_probe_release_margin_mb=settings.auto_probe_release_margin_mb,
-            exclusive_max_used_mb=settings.exclusive_max_used_mb,
-            exclusive_max_utilization=settings.exclusive_max_utilization,
-            nvidia_smi=settings.nvidia_smi,
-            notify_command=settings.notify_command,
-            config_path=settings.config_path,
-        )
-    run_daemon(settings, once=args.once, dry_run=args.dry_run)
+    overrides = {
+        key: getattr(args, key) for key in ("poll_seconds", "max_running_jobs", "scheduling_mode")
+        if getattr(args, key) is not None
+    }
+    settings = replace(settings, **overrides)
+    if settings.poll_seconds <= 0:
+        raise ValueError("poll_seconds must be positive")
+    if args.background:
+        if args.once or args.dry_run:
+            raise ValueError("--background cannot be combined with --once or --dry-run")
+        from .background import start_daemon
+        start_daemon(settings)
+    else:
+        run_daemon(settings, once=args.once, dry_run=args.dry_run)
+    return 0
+
+
+def command_projects(args: argparse.Namespace) -> int:
+    """Print all persisted project policies and status counts, optionally as JSON.
+
+    Counts active starting/running and pending queued/waiting_memory/retry_wait;
+    blocked dependencies and terminal jobs are not pending. last_served is a
+    claim sequence, not a wall-clock time. Opening the DB may perform migrations.
+    """
+    _, db = _db(args)
+    jobs = db.list(limit=None)
+    rows = []
+    for project, (limit, last_served) in sorted(db.project_policies().items()):
+        owned = [job for job in jobs if job.project_id == project]
+        rows.append({
+            "project_id": project, "concurrency_limit": limit, "last_served": last_served,
+            "active": sum(job.status in {"starting", "running"} for job in owned),
+            "pending": sum(job.status in {"queued", "waiting_memory", "retry_wait"} for job in owned),
+        })
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    else:
+        for row in rows:
+            print(f"{row['project_id']}  active={row['active']} pending={row['pending']} "
+                  f"limit={row['concurrency_limit']} last_turn={row['last_served']}")
     return 0
 
 
@@ -462,6 +519,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--state-dir", help="覆盖状态目录，默认 ~/.local/state/gpuq")
     parser.add_argument("--config", help="覆盖配置文件，默认 ~/.config/gpuq/config.toml")
+    parser.add_argument("--remote", help="SSH profile, alias, IP or user@host")
+    parser.add_argument("--ssh-port", type=int)
+    parser.add_argument("--ssh-identity")
+    parser.add_argument("--remote-command", help="Remote gpuq executable/argv")
+    parser.add_argument("--remote-config", help="Configuration path on remote host")
+    parser.add_argument("--remote-workdir", help="Persistent remote workspace/cache root")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
@@ -492,6 +555,15 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--priority", type=int, default=0, help="优先级；数值越大越先调度")
     submit.add_argument("--exclusive", action="store_true", help="要求 GPU 无 compute 进程且接近空闲")
     submit.add_argument("--cwd", help="任务工作目录；默认当前目录")
+    submit.add_argument("--no-sync", action="store_true", help="Use an existing remote checkout")
+    submit.add_argument("--remote-cwd", help="Remote cwd; requires --no-sync")
+    submit.add_argument("--sync-exclude", action="append", default=[], help="Additional exclusion glob")
+    submit.add_argument("--sync-include", action="append", default=[],
+                        help="Explicit project-relative file/directory, e.g. resume checkpoint")
+    submit.add_argument("--sync-preview", action="store_true", help="List selected files without SSH")
+    submit.add_argument("--project", help="项目标识；默认自动检测 Git/项目根目录")
+    submit.add_argument("--project-limit", type=_positive_int,
+                        help="设置该项目普通任务并发上限；多项目竞争时还受公平份额约束")
     submit.add_argument("--env", action="append", default=[], metavar="KEY=VALUE", help="附加环境变量；可重复")
     submit.add_argument("--after", type=int, help="仅在指定任务成功后运行")
     submit.add_argument(
@@ -559,21 +631,50 @@ def build_parser() -> argparse.ArgumentParser:
 
     daemon = sub.add_parser("daemon", help="启动常驻调度循环")
     daemon.add_argument("--poll-seconds", type=float, help="覆盖监控间隔")
+    daemon.add_argument("--max-running-jobs", type=_nonnegative_int,
+                        help="队列总任务并发上限；0 表示不限制")
+    daemon.add_argument("--scheduling", dest="scheduling_mode", choices=["fair", "fifo"],
+                        help="fair 项目轮转，fifo 兼容旧的优先级/提交顺序")
+    daemon.add_argument("--background", action="store_true", help="Start detached daemon; reuse existing instance")
     daemon.add_argument("--once", action="store_true", help="只执行一次调度 tick")
     daemon.add_argument("--dry-run", action="store_true", help="计算可运行任务但不启动")
     daemon.set_defaults(function=command_daemon)
 
     doctor = sub.add_parser("doctor", help="检查数据库、状态目录和 GPU 监控")
     doctor.set_defaults(function=command_doctor)
+    projects = sub.add_parser("projects", help="查看项目并发限制和队列统计")
+    projects.add_argument("--json", action="store_true")
+    projects.set_defaults(function=command_projects)
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Route CLI, SSH client or internal SSH server before opening a queue.
+
+    Only the exact internal flag invokes serve. Otherwise --remote dispatches
+    without touching the local DB; local commands reject remote-only options.
+    Handlers return status codes, but this CLI API raises SystemExit. Expected
+    validation/OS/subprocess errors become argparse errors with exit status 2.
+    """
+    from .remote import REMOTE_FLAG, dispatch, serve
+
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
     try:
-        code = int(args.function(args))
-    except (ValueError, KeyError, RuntimeError) as error:
+        if argv == [REMOTE_FLAG]:
+            code = serve()
+        else:
+            args = parser.parse_args(argv)
+            if args.remote:
+                code = dispatch(args, argv)
+            else:
+                if any(getattr(args, name, None) for name in (
+                    "ssh_port", "ssh_identity", "remote_command", "remote_config", "remote_workdir",
+                    "no_sync", "remote_cwd", "sync_exclude", "sync_include", "sync_preview",
+                )):
+                    raise ValueError("SSH/sync options require --remote")
+                code = int(args.function(args))
+    except (ValueError, KeyError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         parser.error(str(error))
         return
     raise SystemExit(code)

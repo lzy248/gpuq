@@ -8,12 +8,14 @@ import sqlite3
 from typing import Any, Iterator, Sequence
 
 from .models import Job, JobStatus, TERMINAL_STATUSES
+from .projects import project_root
 
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    project_id TEXT NOT NULL DEFAULT '',
     command_json TEXT NOT NULL,
     cwd TEXT NOT NULL,
     env_json TEXT NOT NULL DEFAULT '{}',
@@ -56,6 +58,16 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS jobs_status_priority_idx
     ON jobs(status, priority DESC, id ASC);
 CREATE INDEX IF NOT EXISTS jobs_dependency_idx ON jobs(dependency_id);
+CREATE TABLE IF NOT EXISTS projects (
+    project_id TEXT PRIMARY KEY,
+    concurrency_limit INTEGER NOT NULL DEFAULT 1 CHECK(concurrency_limit > 0),
+    last_served INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS scheduling_state (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO scheduling_state VALUES ('sequence', 0);
 """
 
 
@@ -78,6 +90,12 @@ class QueueDB:
         return connection
 
     def initialize(self) -> None:
+        """Create schema and migrate missing columns/project identities in place.
+
+        Legacy jobs derive project_id from their recorded cwd and seed a project cap
+        of one. Existing policies are retained. This performs writes even when the
+        caller only intends to inspect a queue; it is not a read-only schema check.
+        """
         with self.connect() as connection:
             connection.executescript(SCHEMA)
             columns = {
@@ -85,6 +103,7 @@ class QueueDB:
                 for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
             }
             migrations = {
+                "project_id": "TEXT NOT NULL DEFAULT ''",
                 "gpu_count": "INTEGER NOT NULL DEFAULT 1",
                 "assigned_gpus_json": "TEXT",
                 "launch_free_memory_by_gpu_json": "TEXT",
@@ -99,6 +118,16 @@ class QueueDB:
                     connection.execute(
                         f"ALTER TABLE jobs ADD COLUMN {name} {definition}"
                     )
+            for row in connection.execute(
+                "SELECT DISTINCT cwd FROM jobs WHERE project_id=''"
+            ).fetchall():
+                connection.execute(
+                    "UPDATE jobs SET project_id=? WHERE cwd=? AND project_id=''",
+                    (str(project_root(row["cwd"])), row["cwd"]),
+                )
+            connection.execute(
+                "INSERT OR IGNORE INTO projects(project_id) SELECT DISTINCT project_id FROM jobs"
+            )
 
     @contextmanager
     def transaction(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
@@ -119,6 +148,7 @@ class QueueDB:
         return Job(
             id=int(row["id"]),
             name=str(row["name"]),
+            project_id=str(row["project_id"]),
             command=tuple(json.loads(row["command_json"])),
             cwd=str(row["cwd"]),
             env=dict(json.loads(row["env_json"])),
@@ -201,9 +231,24 @@ class QueueDB:
         notify: bool,
         memory_mode: str = "fixed",
         gpu_count: int = 1,
+        project_id: str | None = None,
+        project_limit: int | None = None,
+        default_project_limit: int = 1,
     ) -> Job:
+        """Persist a job and its shared project policy in one transaction.
+
+        Absent project_id is derived from cwd. default_project_limit seeds only a
+        new project; explicit project_limit updates the policy shared by all jobs
+        with that identity. Validation failure rolls back insertion and policy edits.
+        Returns a fresh Job; this does not claim GPUs or start a scheduler.
+        """
         if not command:
             raise ValueError("command cannot be empty")
+        project_id = project_id if project_id is not None else str(project_root(cwd))
+        if not project_id.strip():
+            raise ValueError("project must not be empty")
+        if default_project_limit < 1 or (project_limit is not None and project_limit < 1):
+            raise ValueError("project concurrency limit must be positive")
         if memory_mb < 1 or reserve_mb < 0 or stable_samples < 1 or max_retries < 0:
             raise ValueError("invalid resource or retry value")
         if memory_mode not in {"fixed", "auto"}:
@@ -232,8 +277,8 @@ class QueueDB:
                     name, command_json, cwd, env_json, gpu_allowlist_json,
                     memory_mb, memory_mode, reserve_mb, max_utilization, stable_samples,
                     priority, status, exclusive, dependency_id, max_retries,
-                    retry_on_oom, log_path, notify, created_at, updated_at, gpu_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retry_on_oom, log_path, notify, created_at, updated_at, gpu_count, project_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     name,
@@ -257,9 +302,19 @@ class QueueDB:
                     now,
                     now,
                     gpu_count,
+                    project_id,
                 ),
             )
             job_id = int(cursor.lastrowid)
+            connection.execute(
+                "INSERT OR IGNORE INTO projects(project_id, concurrency_limit) VALUES (?, ?)",
+                (project_id, default_project_limit),
+            )
+            if project_limit is not None:
+                connection.execute(
+                    "UPDATE projects SET concurrency_limit=? WHERE project_id=?",
+                    (project_limit, project_id),
+                )
         return self.get(job_id)
 
     def get(self, job_id: int) -> Job:
@@ -269,15 +324,17 @@ class QueueDB:
             raise KeyError(f"job {job_id} not found")
         return self._job(row)
 
-    def list(self, *, statuses: Sequence[str] | None = None, limit: int = 200) -> list[Job]:
+    def list(self, *, statuses: Sequence[str] | None = None, limit: int | None = 200) -> list[Job]:
         query = "SELECT * FROM jobs"
         parameters: list[Any] = []
         if statuses:
             placeholders = ",".join("?" for _ in statuses)
             query += f" WHERE status IN ({placeholders})"
             parameters.extend(statuses)
-        query += " ORDER BY CASE WHEN status IN ('running','starting') THEN 0 ELSE 1 END, priority DESC, id ASC LIMIT ?"
-        parameters.append(limit)
+        query += " ORDER BY CASE WHEN status IN ('running','starting') THEN 0 ELSE 1 END, priority DESC, id ASC"
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(query, parameters).fetchall()
         return [self._job(row) for row in rows]
@@ -352,6 +409,14 @@ class QueueDB:
         gpu_indices: Sequence[int] | None = None,
         launch_free_memory_by_gpu: dict[int, int] | None = None,
     ) -> bool:
+        """Atomically claim one runnable job and advance its project's admission turn.
+
+        Validate the full GPU assignment before the conditional update. Success writes
+        starting, attempt and assignment together with the monotonic global sequence
+        and project last_served. Return False for missing/non-runnable jobs without
+        consuming a turn. Total/project caps are scheduler policy, not enforced here;
+        one daemon per queue remains required. A later launcher failure keeps the turn.
+        """
         indices = tuple(gpu_indices) if gpu_indices is not None else (gpu_index,)
         if not indices or indices[0] != gpu_index or len(set(indices)) != len(indices):
             raise ValueError("assigned GPUs must be distinct and start with gpu_index")
@@ -390,7 +455,14 @@ class QueueDB:
                     JobStatus.RETRY_WAIT.value,
                 ),
             )
-            return cursor.rowcount == 1
+            claimed = cursor.rowcount == 1
+            if claimed:
+                connection.execute("UPDATE scheduling_state SET value=value+1 WHERE key='sequence'")
+                connection.execute(
+                    "UPDATE projects SET last_served=(SELECT value FROM scheduling_state "
+                    "WHERE key='sequence') WHERE project_id=?", (job.project_id,),
+                )
+            return claimed
 
     def mark_running(self, job_id: int, *, pid: int, pgid: int) -> None:
         with self.connect() as connection:
@@ -631,4 +703,22 @@ class QueueDB:
         return self.get(job_id)
 
     def active(self) -> list[Job]:
-        return self.list(statuses=[JobStatus.STARTING.value, JobStatus.RUNNING.value])
+        """Return every starting/running job, without the UI list's default limit.
+
+        Resource reservation and project/global concurrency calculations depend on
+        this complete snapshot; imposing a display-oriented limit undercounts usage.
+        """
+        return self.list(statuses=[JobStatus.STARTING.value, JobStatus.RUNNING.value], limit=None)
+
+    def project_policies(self) -> dict[str, tuple[int, int]]:
+        """Read project IDs mapped to (concurrency cap, last successful claim turn).
+
+        The monotonic turn is a DB sequence, not a timestamp. Submit changes a cap
+        only when explicitly requested; claim advances turns transactionally.
+        """
+        with self.connect() as connection:
+            rows = connection.execute("SELECT * FROM projects").fetchall()
+        return {
+            str(row["project_id"]): (int(row["concurrency_limit"]), int(row["last_served"]))
+            for row in rows
+        }

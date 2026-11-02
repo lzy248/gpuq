@@ -249,3 +249,48 @@ def test_init_writes_parseable_config_and_allows_zero_reserve(
     assert settings.auto_probe_stable_samples == 12
     assert settings.auto_probe_stability_tolerance_mb == 128
     assert settings.auto_probe_release_margin_mb == 1024
+
+
+def test_show_and_list_localize_time_without_mutating_database(db, settings, tmp_path, monkeypatch, capsys):
+    import json
+    import time
+    from gpuq.cli import command_list, command_show
+    from gpuq.db import utcnow
+    from datetime import datetime, timedelta
+
+    job = submit_job(db, tmp_path)
+    original_tz = os.environ.get("TZ")
+    try:
+        monkeypatch.setenv("TZ", "Asia/Shanghai")
+        time.tzset()
+        assert datetime.fromisoformat(utcnow()).utcoffset() == timedelta(0)
+        stored = "2026-11-01T20:30:00+00:00"
+        with db.connect() as connection:
+            connection.execute("UPDATE jobs SET created_at=?, updated_at=?, started_at=? WHERE id=?",
+                               (stored, stored, "2026-11-01T15:30:00-05:00", job.id))
+        monkeypatch.setattr("gpuq.cli._db", lambda args: (settings, db))
+        command_show(build_parser().parse_args(["show", str(job.id)]))
+        output = capsys.readouterr().out
+        assert output.count("2026-11-02T04:30:00+08:00") == 3
+        assert "finished_at" in output and "None" in output
+        command_show(build_parser().parse_args(["show", str(job.id), "--json"]))
+        decoded = json.loads(capsys.readouterr().out)
+        assert decoded["created_at"] == "2026-11-02T04:30:00+08:00"
+        assert decoded["started_at"] == "2026-11-02T04:30:00+08:00"
+        assert decoded["finished_at"] is None
+        command_list(build_parser().parse_args(["list", "--json"]))
+        assert json.loads(capsys.readouterr().out)[0] == decoded
+        assert db.get(job.id).created_at == stored
+        assert db.get(job.id).started_at == "2026-11-01T15:30:00-05:00"
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
+
+
+@pytest.mark.parametrize("value", [None, "", "unknown", "2026-11-02T04:30:00"])
+def test_display_timestamp_preserves_unknown_timezone(value):
+    from gpuq.cli import _display_timestamp
+    assert _display_timestamp(value) == value

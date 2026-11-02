@@ -18,6 +18,9 @@
 | 字段 | 默认值 / 单位 |
 |---|---|
 | state_dir | `~/.local/state/gpuq` |
+| scheduling_mode | `fair`；可选 `fifo` |
+| max_running_jobs | 0（不设总并发上限）；>=0，所有优先级都受限 |
+| default_project_limit | 1；>=1，仅初始化新项目的普通任务并发上限 |
 | poll_seconds | 10.0 秒，必须 > 0 |
 | default_reserve_mb | 1024 MB，每卡，>= 0 |
 | default_stable_samples | 3，>= 1 |
@@ -51,11 +54,14 @@ runner 通知路径重新加载，通过 scheduler 继承的 GPUQ_CONFIG 使用�
 无效 TOML/数字会抛异常。`exclusive_max_used_mb`/`exclusive_max_utilization` 当前仅 int
 转换，不提供完整范围校验，不能宣称所有字段都有严格类型和范围验证。
 示例 TOML 和 init 输出是常用项子集，未列出的字段使用上表默认值。
-CLI 中 init 目标路径和 poll override 的例外见 [CLI](cli.md)。
+CLI 中 init 目标路径例外见 [CLI](cli.md)。daemon 覆盖保留所有未修改字段。
+本地配置的 [remotes.NAME] 由 [SSH](remote.md) 读取，不进入 Settings；
+远程队列使用远程配置，不能把本地 [gpuq] 配置隐式复制到远程。
 
 ## 修改与验证
 
 新增项一起更新 Settings、load_settings、必要验证、CLI 重建/模板、示例配置与本文默认表。
 若影响 worker/通知，验证 config_path 环境传递；不要把配置只加到 dataclass。
 运行 `pytest tests/test_cli.py tests/test_exclusive_external_sharing.py tests/test_orphan_recovery.py`。
-当前没有独立 test_config.py；新增优先级/校验测试应使用临时文件并隔离环境变量。
+项目模式/并发校验和 daemon 覆盖保留还需运行 `pytest tests/test_projects.py`。
+当前没有独立 test_config.py；新增配置测试应使用临时文件并隔离环境变量。

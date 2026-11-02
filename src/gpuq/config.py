@@ -26,6 +26,9 @@ class Settings:
     exclusive_max_utilization: int = 5
     exclusive_shared_gpus: tuple[int, ...] = ()
     max_orphan_retries: int = 0
+    scheduling_mode: str = "fair"
+    max_running_jobs: int = 0
+    default_project_limit: int = 1
     nvidia_smi: str = "nvidia-smi"
     notify_command: tuple[str, ...] | None = None
     config_path: Path | None = None
@@ -92,6 +95,9 @@ def load_settings(
     if auto_probe_hold < 0:
         raise ValueError("auto_probe_hold_seconds must be nonnegative")
     notify = data.get("notify_command")
+    scheduling_mode = str(data.get("scheduling_mode", "fair"))
+    if scheduling_mode not in {"fair", "fifo"}:
+        raise ValueError("scheduling_mode must be fair or fifo")
     notify_command: tuple[str, ...] | None
     if notify is None:
         notify_command = None
@@ -101,6 +107,11 @@ def load_settings(
         notify_command = tuple(str(part) for part in notify)
     return Settings(
         state_dir=root,
+        scheduling_mode=scheduling_mode,
+        max_running_jobs=_nonnegative_int(data.get("max_running_jobs", 0), "max_running_jobs"),
+        default_project_limit=_positive_int(
+            data.get("default_project_limit", 1), "default_project_limit"
+        ),
         poll_seconds=poll,
         default_reserve_mb=_nonnegative_int(
             data.get("default_reserve_mb", 1024), "default_reserve_mb"
