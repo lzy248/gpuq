@@ -45,6 +45,8 @@ Use it on a workstation, through SSH on a remote server, or across a shared pool
 - **Shared GPU pool.** Optionally schedule across local and remote machines, with master election,
   standby takeover, preferred-master failback, and configurable retries for disconnected jobs.
 
+- **Agent skill.** Let your coding agent submit and inspect jobs through conversation; see [installation and examples](#agent-skill).
+
 ## Requirements
 
 - Linux
@@ -248,6 +250,42 @@ managed runners and training workers.
 gpuq manages the jobs you submit and leaves other users' processes running. It checks available resources
 before launch; `--reserve` leaves headroom for memory fluctuations on shared GPUs. Resource checks and
 memory sampling are described in the [scheduling guide](docs/scheduling.en.md).
+
+## Agent skill
+
+Give your coding agent the [gpuq skill](skills/gpuq/SKILL.md) to handle GPU jobs directly from a conversation.
+It covers queue selection, single- and multi-GPU submission, status and logs, remote code/checkpoint sync,
+and diagnosis of waiting or failed jobs. Remote and cluster details are loaded only when needed.
+
+### Install for Codex
+
+Install gpuq first using the instructions above. Then, from the root of a checkout containing
+`skills/gpuq`, copy the complete skill folder:
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R skills/gpuq "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+The default destination is `~/.codex/skills/gpuq`. If it already exists, compare the files before updating
+to preserve your customizations. Start a new session or refresh the skill list after installation.
+The skill is distributed in the repository; installing the gpuq binary alone does not install it.
+
+### Use it
+
+Mention `$gpuq` and describe the workload and target queue, for example:
+
+- “Use $gpuq to submit `torchrun --standalone --nproc_per_node=2 train.py` on two local GPUs.”
+- “Use $gpuq to submit training to my `train` remote profile, including `checkpoints/last.ckpt` for resume.”
+- “Use $gpuq to check why job 42 is waiting in my shared pool, and show the relevant logs.”
+
+Provide your config path when it differs from the default. The agent uses the CLI to perform the requested
+operations and reports the job ID and observed state. Remote profiles or a shared pool should already be
+configured unless setting them up is part of your request.
+
+For other agents that support `SKILL.md`, copy the entire `skills/gpuq/` directory into their skill search
+path, including `references/`. `agents/openai.yaml` provides optional Codex UI metadata; the instructions
+and references can be used independently.
 
 ## Development
 

@@ -25,7 +25,7 @@ README 二进制下载示例为 0.3.0，与当前包版本一致。
 | 文件 | 重要信息 |
 |---|---|
 | pyproject.toml | setuptools>=77，发行包名 personal-gpuq、导入名 gpuq；Python>=3.10；3.10 需 tomli；dev 包含 pytest/build/pytest-cov/Ruff 0.16.6；binary 包含 PyInstaller |
-| MANIFEST.in | sdist 包含工程文档、AGENTS、检查器、测试及 fixtures、文档引用的配置/脚本/资产；wheel 仍以运行时包为主 |
+| MANIFEST.in | sdist 包含可独立安装的 skills/gpuq 操作技能及工程文档、AGENTS、检查器、测试及 fixtures、文档引用的配置/脚本/资产；wheel 仍以运行时包为主 |
 | config.example.toml | [gpuq] 的 fair/总并发/项目初始上限、资源及通知示例；本地 [remotes.train] 连接/环境样例；非全部字段全集 |
 | scripts/build_binary.sh | PYTHON 默认 python3，GPUQ_BINARY_ARCH 默认 linux-x86_64；PyInstaller onefile，产物 dist/gpuq 和带版本 tar.gz/sha256 |
 | systemd/gpuqd.service | 用户服务 ExecStart=%h/.local/bin/gpuq daemon；Restart=on-failure、5 秒；KillMode=process；PYTHONUNBUFFERED=1 |
@@ -69,6 +69,8 @@ Python 包：`python -m build` 生成 sdist/wheel。
 配置样例没有列出所有 auto/recovery/shared-GPU 项，默认值以 [config](config.md) 为准。
 GitHub release 上传是外部写入；文档维护/本地测试不意味着授权发布或重启真实服务。
 安全协作见 [SECURITY](../../SECURITY.md)，改动历史见 [CHANGELOG](../../CHANGELOG.md)。
+
+技能分发与安装见 [agent-skill](agent-skill.md)；源码包包含技能，wheel/二进制不自动安装到 agent 目录。
 
 ## 修改与验证
 

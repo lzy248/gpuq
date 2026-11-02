@@ -39,6 +39,8 @@
 - **远程工作区。** 通过 SSH 提交和管理任务，增量同步代码，复用各节点的 Python 环境与模型缓存。
 - **统一 GPU 池。** 可选跨主机调度，支持主节点选举、备节点接管、原主回切和可配置的失联任务重排。
 
+- **Agent 技能。** 在对话中让 coding agent 提交和查看任务，见[安装与使用示例](#agent-使用技能)。
+
 ## 环境要求
 
 - Linux
@@ -233,6 +235,38 @@ systemctl --user status gpuqd.service
 gpuq 管理你提交的任务，保持其他用户的进程正常运行。启动前检查可用资源，
 `--reserve` 用于为共享 GPU 上的显存波动留出余量。
 资源检查与显存采样的具体行为见[调度说明](docs/scheduling.md)。
+
+## Agent 使用技能
+
+给 coding agent 安装 [gpuq skill](skills/gpuq/SKILL.md)，就可以在对话中提交和管理 GPU 任务。
+技能涵盖队列选择、单卡/多卡提交、状态与日志、远程代码/checkpoint 同步，以及等待或失败任务的排查。
+远程和集群的详细说明按需读取。
+
+### 安装到 Codex
+
+先按上文安装 gpuq，再进入包含 `skills/gpuq` 的仓库根目录，复制完整技能文件夹：
+
+```bash
+mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
+cp -R skills/gpuq "${CODEX_HOME:-$HOME/.codex}/skills/"
+```
+
+默认安装位置是 `~/.codex/skills/gpuq`。已有同名技能时先对比文件，保留你的定制内容。
+安装后新建会话或刷新技能列表。技能随仓库提供，单独安装 gpuq 二进制不会自动安装技能。
+
+### 在对话中使用
+
+提到 `$gpuq`，说明任务和目标队列即可，例如：
+
+- “用 $gpuq 在本机申请两张卡，运行 `torchrun --standalone --nproc_per_node=2 train.py`。”
+- “用 $gpuq 把训练提交到我的 `train` 远程 profile，带上 `checkpoints/last.ckpt` 继续训练。”
+- “用 $gpuq 检查统一池里的 42 号任务为什么还在等待，并查看相关日志。”
+
+使用非默认配置时附上配置路径。agent 会通过 CLI 完成所请求的操作，并返回任务 ID 和实际状态。
+远程 profile 或统一池应已配置好；需要协助配置时，在请求中一并说明。
+
+其他支持 `SKILL.md` 的 agent 可以将整个 `skills/gpuq/` 目录放到其技能搜索路径，
+保留其中的 `references/`。`agents/openai.yaml` 是可选的 Codex 界面元数据，技能正文和参考文件可独立使用。
 
 ## 开发
 

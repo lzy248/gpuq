@@ -1,0 +1,4 @@
+interface:
+  display_name: "gpuq"
+  short_description: "Submit and manage local, remote, and pooled GPU jobs"
+  default_prompt: "Use $gpuq to submit and monitor my GPU workload in the intended queue."

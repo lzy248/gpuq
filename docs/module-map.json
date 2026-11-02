@@ -151,6 +151,16 @@
       "files": [
         "src/gpuq/cluster.py"
       ]
+    },
+    {
+      "doc": "docs/modules/agent-skill.md",
+      "files": [
+        "skills/gpuq/SKILL.md",
+        "skills/gpuq/agents/openai.yaml",
+        "skills/gpuq/references/remote.md",
+        "skills/gpuq/references/cluster.md",
+        "skills/gpuq/references/recovery.md"
+      ]
     }
   ]
 }

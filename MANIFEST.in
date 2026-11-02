@@ -7,3 +7,4 @@ recursive-include packaging *.py
 recursive-include systemd *.service
 recursive-include .github *.yml *.md
 recursive-include assets *.svg
+recursive-include skills *.md *.yaml

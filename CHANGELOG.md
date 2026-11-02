@@ -4,6 +4,9 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ## Unreleased
 
+- Add a portable gpuq agent skill for local, SSH and shared-pool operations, with installation instructions.
+- 新增可独立安装的 gpuq 操作技能，覆盖本地、SSH、统一池和故障处理，附双语安装入口。
+
 ## [0.3.0] - 2026-11-02
 
 ### English

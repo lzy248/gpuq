@@ -92,6 +92,7 @@ flowchart LR
 
 | 模块说明 | 覆盖范围 / 应解决的问题 |
 |---|---|
+| [Agent 操作技能](modules/agent-skill.md) | 面向使用者的 gpuq 技能、安装、队列选择与按需参考 |
 | [入口](modules/entrypoints.md) | `__init__`、`__main__`、打包入口；Python/二进制怎样调用 CLI 与 runner |
 | [全局队列与选主](modules/cluster.md) | 多数派控制面、首选主回归、执行去重与节点隔离 |
 | [集群输入复制](modules/cluster-transfer.md) | 复制输入缓存与读取节点日志；不在传输时提交任务 |
@@ -119,6 +120,7 @@ flowchart LR
 
 | 要做什么 | 先读的模块 | 必须一起考虑 |
 |---|---|---|
+| 修改 agent 使用流程 | [操作技能](modules/agent-skill.md)、[CLI](modules/cli.md) | 双语 README 安装入口、参考文件、参数/故障语义 |
 | 修改全局调度/选主/回切 | [集群](modules/cluster.md)、[一致性](modules/coordination.md)、[复制](modules/cluster-transfer.md) | 任期隔离、持久执行去重、三成员测试、双语部署手册 |
 | 修改远程提交、传输或环境 | [SSH](modules/remote.md)、[同步](modules/sync.md)、[环境](modules/environment.md) | 协议兼容、隔离快照、缓存复用、双语远程手册 |
 | 修改项目公平性 | [项目识别](modules/projects.md)、[调度器](modules/scheduler.md) | DB 持久轮次、并发限额、优先级、无抢占 |
