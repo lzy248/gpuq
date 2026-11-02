@@ -1,0 +1,61 @@
+# 配置与运行路径
+
+[返回工程总览](../README.md) · [工程规范](../../AGENTS.md)
+
+覆盖文件：[src/gpuq/config.py](../../src/gpuq/config.py)。
+
+## 职责与边界
+
+把 TOML、显式路径和环境变量变成冻结的 `Settings`。本模块不打开 DB、不采样 GPU；
+`ensure_state_dirs` 才会创建目录。调用方是 [CLI](cli.md)、[scheduler](scheduler.md)
+和通知前重新加载配置的 [runner](runner.md)。
+
+## 接口与数据
+
+`load_settings(*, state_dir=None, config_path=None) -> Settings`。
+支持 `[gpuq]` 表，也支持顶层键；没有配置文件时使用默认值。
+
+| 字段 | 默认值 / 单位 |
+|---|---|
+| state_dir | `~/.local/state/gpuq` |
+| poll_seconds | 10.0 秒，必须 > 0 |
+| default_reserve_mb | 1024 MB，每卡，>= 0 |
+| default_stable_samples | 3，>= 1 |
+| auto_probe_hold_seconds | 300.0 秒，>= 0 |
+| auto_probe_stable_samples | 12，>= 1 |
+| auto_probe_stability_tolerance_mb | 128 MB，>= 0 |
+| auto_probe_release_margin_mb | 1024 MB，>= 0 |
+| exclusive_max_used_mb | 768 MB |
+| exclusive_max_utilization | 5（百分比） |
+| exclusive_shared_gpus | 空 tuple；显式允许独占任务与队列外进程共享的物理卡 |
+| max_orphan_retries | 0（关闭）；>= 0，每任务独立持久预算 |
+| nvidia_smi | `nvidia-smi` 可执行文件 |
+| notify_command | None；字符串经 shlex.split，数组逐元素变成 argv |
+| config_path | 实际选择的配置路径；默认文件不存在且未显式指定时为 None |
+
+派生路径：`database_path=state_dir/queue.sqlite3`，`logs_dir=state_dir/logs`，
+`lock_path=state_dir/gpuqd.lock`。
+
+## 关键流程与不变量
+
+配置路径优先级：显式 `config_path` > `GPUQ_CONFIG` > 默认配置路径。
+状态目录优先级：显式 `state_dir` > TOML 的 `state_dir` > `GPUQ_STATE_DIR` > 默认目录。
+注意 TOML state_dir 高于环境变量。路径 expanduser 后 resolve。
+
+Python 3.11+ 用 tomllib，3.10 用 tomli。加载器对正值/非负值做检查；构造 Settings
+本身没有同等验证，测试可以直接构造。配置不是自动热加载：daemon 启动时取快照；
+runner 通知路径重新加载，通过 scheduler 继承的 GPUQ_CONFIG 使用自定义配置。
+
+## 失败与限制
+
+无效 TOML/数字会抛异常。`exclusive_max_used_mb`/`exclusive_max_utilization` 当前仅 int
+转换，不提供完整范围校验，不能宣称所有字段都有严格类型和范围验证。
+示例 TOML 和 init 输出是常用项子集，未列出的字段使用上表默认值。
+CLI 中 init 目标路径和 poll override 的例外见 [CLI](cli.md)。
+
+## 修改与验证
+
+新增项一起更新 Settings、load_settings、必要验证、CLI 重建/模板、示例配置与本文默认表。
+若影响 worker/通知，验证 config_path 环境传递；不要把配置只加到 dataclass。
+运行 `pytest tests/test_cli.py tests/test_exclusive_external_sharing.py tests/test_orphan_recovery.py`。
+当前没有独立 test_config.py；新增优先级/校验测试应使用临时文件并隔离环境变量。

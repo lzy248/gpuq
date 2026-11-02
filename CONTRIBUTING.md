@@ -4,6 +4,11 @@
 
 Thanks for improving gpuq. Small, focused pull requests are easiest to review.
 
+Start with the [engineering guide](docs/README.md) and follow [AGENTS.md](AGENTS.md).
+Every maintained code/config/test file must have a module owner in
+[module-map.json](docs/module-map.json). Update module contracts with behavior changes;
+new modules use the [documentation template](docs/templates/module.md).
+
 1. Open an issue for behavior changes or scheduling-policy changes.
 2. Fork the repository and create a branch from `main`.
 3. Install development tools:
@@ -20,7 +25,8 @@ Thanks for improving gpuq. Small, focused pull requests are easiest to review.
 5. Run:
 
    ```bash
-   ruff check src tests
+   python scripts/check_docs.py
+   ruff check src tests scripts/check_docs.py
    pytest
    python -m build
    ```
@@ -42,6 +48,10 @@ commands in issues and tests.
 
 感谢帮助改进 gpuq。范围清晰、改动集中的 PR 最容易审查。
 
+先读[工程总览](docs/README.md) 和 [AGENTS.md](AGENTS.md)。所有维护的代码、配置、测试
+文件都必须在[归属清单](docs/module-map.json) 中关联模块说明；行为变更同步说明，新增模块
+使用[文档模板](docs/templates/module.md)。结构检查通过后仍需人工核对文档语义与实际实现。
+
 1. 调度策略或外部行为变更请先提交 issue。
 2. Fork 仓库并从 `main` 创建分支。
 3. 安装开发依赖：
@@ -57,7 +67,8 @@ commands in issues and tests.
 5. 运行：
 
    ```bash
-   ruff check src tests
+   python scripts/check_docs.py
+   ruff check src tests scripts/check_docs.py
    pytest
    python -m build
    ```

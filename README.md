@@ -26,6 +26,10 @@ one user stop babysitting an unmanaged GPU box.
 
 ## Who is it for?
 
+Developers and agents: start with the [engineering guide](docs/README.md) for architecture,
+module contracts, change routes, and validation commands. Follow [AGENTS.md](AGENTS.md)
+to keep code and documentation in sync.
+
 `gpuq` fits when:
 
 - a lab or team shares a workstation/server by launching CUDA commands directly;

@@ -1,0 +1,9 @@
+include AGENTS.md CONTRIBUTING.md README.zh-CN.md SECURITY.md CHANGELOG.md
+include config.example.toml .gitignore
+recursive-include docs *.md *.json
+recursive-include scripts *.py *.sh
+recursive-include tests *.py
+recursive-include packaging *.py
+recursive-include systemd *.service
+recursive-include .github *.yml *.md
+recursive-include assets *.svg

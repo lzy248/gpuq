@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "modules": [
+    {
+      "doc": "docs/modules/entrypoints.md",
+      "files": [
+        "src/gpuq/__init__.py",
+        "src/gpuq/__main__.py",
+        "packaging/gpuq_entry.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/cli.md",
+      "files": [
+        "src/gpuq/cli.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/config.md",
+      "files": [
+        "src/gpuq/config.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/models.md",
+      "files": [
+        "src/gpuq/models.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/db.md",
+      "files": [
+        "src/gpuq/db.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/gpu.md",
+      "files": [
+        "src/gpuq/gpu.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/scheduler.md",
+      "files": [
+        "src/gpuq/scheduler.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/runner.md",
+      "files": [
+        "src/gpuq/runner.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/recovery.md",
+      "files": [
+        "src/gpuq/recovery.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/notify.md",
+      "files": [
+        "src/gpuq/notify.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/testing.md",
+      "files": [
+        "tests/conftest.py",
+        "tests/test_cli.py",
+        "tests/test_db.py",
+        "tests/test_exclusive_external_sharing.py",
+        "tests/test_gpu.py",
+        "tests/test_multigpu.py",
+        "tests/test_orphan_recovery.py",
+        "tests/test_runner.py",
+        "tests/test_scheduler.py",
+        "tests/test_docs.py"
+      ]
+    },
+    {
+      "doc": "docs/modules/operations.md",
+      "files": [
+        "pyproject.toml",
+        "config.example.toml",
+        "scripts/build_binary.sh",
+        "systemd/gpuqd.service",
+        ".github/workflows/ci.yml",
+        ".github/workflows/release.yml",
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/release-notes/v0.2.0.md",
+        "assets/gpuq-logo.svg",
+        "LICENSE",
+        ".gitignore",
+        "MANIFEST.in"
+      ]
+    },
+    {
+      "doc": "docs/modules/documentation.md",
+      "files": [
+        "docs/module-map.json",
+        "scripts/check_docs.py"
+      ]
+    }
+  ]
+}
