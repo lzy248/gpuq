@@ -12,6 +12,11 @@
 
 ## 接口与数据
 
+新增 --local 显式选择独立本地队列，与 --remote/--cluster 互斥。default_queue=cluster 时普通 submit/list/
+show/logs/cancel/retry/daemon/gpus/projects/doctor 进入池，init 不改变路由。内部 --gpuq-pool-store
+进入单主 SQLite 的受限 SSH RPC；默认队列选择发生于打开数据库之前。
+
+
 | 命令 / 函数 | 输入到输出或副作用 |
 |---|---|
 | `main(argv=None)` | 调用 handler，最终 `SystemExit(code)`；不是返回整数的库 API |
@@ -42,7 +47,7 @@ show 文本/JSON 与 list JSON 共享 _job_display_dict；Job.as_dict 的原始�
 
 ## 关键流程与不变量
 
-全局 --cluster 及 cluster init/status 先转入 [集群入口](cluster.md)，与 --remote 互斥；
+默认队列选择或全局 --cluster 及 cluster init/status 先转入 [集群入口](cluster.md)，与 --remote 互斥；
 --gpuq-cluster-call 为仅用于缓存/日志的内部 SSH 入口。
 全局 `--remote` 在打开本地 DB 前转入 [SSH](remote.md)。远程配置与同步参数见
 [远程手册](../remote_usage.md)；本地调用拒绝远程专用选项。内部 --gpuq-remote-call 路由到协议服务端。

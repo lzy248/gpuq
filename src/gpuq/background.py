@@ -37,7 +37,7 @@ def start_daemon(settings: Settings) -> None:
         print("daemon already running; existing settings retained")
         return
     command = [sys.executable] if getattr(sys, "frozen", False) else [sys.executable, "-m", "gpuq"]
-    command += ["--state-dir", str(settings.state_dir)]
+    command += ["--local", "--state-dir", str(settings.state_dir)]
     if settings.config_path:
         command += ["--config", str(settings.config_path)]
     command += ["daemon", "--poll-seconds", str(settings.poll_seconds), "--max-running-jobs",

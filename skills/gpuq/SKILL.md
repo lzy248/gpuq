@@ -5,7 +5,7 @@ description: Submit, monitor, diagnose, cancel, and retry GPU workloads with gpu
 
 # gpuq
 
-Operate GPU tasks through the public CLI. Guidance targets gpuq 0.3.0; check `gpuq --version`
+Operate GPU tasks through the public CLI. Core guidance targets gpuq 0.3.0; simple SQLite/SSH pools and --local/default_queue require newer source. Check `gpuq --version`
 and the relevant command's `--help` if the installed version differs. Preserve the user's
 command, environment, queue selection, and existing authorization.
 
@@ -16,14 +16,17 @@ show, logs, cancel, and retry. Global options go **before** the subcommand.
 
 | Mode | Command prefix | Scope |
 |---|---|---|
-| Local | `gpuq --config /path/config.toml` | One local SQLite queue |
+| Local | `gpuq --config /path/config.toml --local` | One independent local SQLite queue; --local requires newer source |
 | SSH remote | `gpuq --config /path/client.toml --remote train` | One independent remote queue |
-| Shared pool | `gpuq --config /path/client.toml --cluster` | One etcd namespace across nodes |
+| Shared pool | `gpuq --config /path/client.toml --cluster` | One pool namespace across nodes (SQLite master or etcd) |
 
+With newer source, [gpuq].default_queue="cluster" routes ordinary commands to the pool; --local overrides it.
+On 0.3.0, omit --local (ordinary commands are local). Check help before using new flags.
 Paths and `train` above are placeholders; use the user's actual configuration. Omit --config
 when the established defaults/environment are correct. `--remote` and `--cluster` are mutually
 exclusive. Do not silently fall back to local execution after remote/quorum failure.
 
+For newer-source simple pools, read [Shared pool](references/cluster.md); no witness is required.
 Before touching a queue, identify the intended host/configuration from the request or existing
 project setup. If a service manages it, inspect its ExecStart and environment: its GPUQ_CONFIG
 may differ from the interactive shell. In local mode, explicit --state-dir wins; otherwise TOML

@@ -11,9 +11,13 @@
 
 ## 接口与数据
 
+新增内部 --gpuq-pool-store 持久 SSH 服务，调用单主 SQLite CAS；无需常驻网络监听。
+
+
 CLI 还识别内部 --gpuq-cluster-call（SSH 输入复制/日志协议），显式 --cluster 与 cluster
 子命令进入 [cluster](cluster.md)。训练 runner 入口不变，仍面向节点本地 journal；
-普通 systemd 服务不会因存在 cluster 配置自动切换模式。
+仅存在 cluster 表不会切换模式；设置 gpuq.default_queue=cluster 后，服务下次启动会运行池 agent。
+原独立本地后台启动显式传 --local，避免被默认路由切换。
 
 
 | 调用 | 实际入口 |

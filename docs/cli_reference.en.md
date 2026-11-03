@@ -2,14 +2,14 @@
 
 [简体中文](cli_reference.md) · English
 
-This document covers the `0.3.0` CLI; existing `0.2.0` releases do not include the new features.
+This document covers the current source CLI. Simple pools, --local and default_queue are unreleased additions, unavailable in the v0.3.0 binary.
 
 ## Global syntax
 
 Global options must precede the subcommand:
 
 ```bash
-gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
+gpuq [--local | --cluster | --remote HOST] [--state-dir PATH] [--config PATH] [--version] SUBCOMMAND ...
 ```
 
 | Option | Meaning | Default |
@@ -17,7 +17,8 @@ gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] [--version] 
 | `--state-dir PATH` | SQLite, lock, and default log directory | `~/.local/state/gpuq` or `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML configuration | `~/.config/gpuq/config.toml` or `GPUQ_CONFIG` |
 | `--version` | Print the installed version and exit | — |
-| `--cluster` | Use the shared etcd-backed pool; exclusive with --remote | Off |
+| `--local` | Independent local queue, overrides default_queue; exclusive with --remote/--cluster | Off |
+| `--cluster` | Shared SQLite/SSH or etcd pool; exclusive with --remote/--local | default_queue |
 | `--remote HOST` | SSH host/IP/user@host or local profile; operations target that remote queue | See remote guide |
 | `--ssh-port N` | Override SSH port | Profile / OpenSSH defaults |
 | `--ssh-identity PATH` | Local SSH identity file | Profile / OpenSSH defaults |
@@ -31,14 +32,16 @@ SSH options require `--remote`. See [remote use](remote_usage.en.md) for profile
 
 ## `gpuq cluster init`
 
-Create global policy once; requires at least three voting etcd members. Existing policy is not overwritten.
+Create global policy once on the SQLite master or etcd quorum (at least three voters). Existing policy is not overwritten.
+The master captures [gpuq].default_project_limit for new projects. Simple-pool initialization must run on its master.
+See [persistent pool configuration](pool_usage.en.md) for ordinary submit routing and contributed GPUs.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--preferred-node ID` | Current cluster.node_id | Master to prefer and eventually hand back to |
 | `--max-running-jobs N` | 0 | Global task cap; 0 is unlimited |
 | `--scheduling fair\|fifo` | fair | Shared admission policy |
-| `--snapshot-copies N` | 2 | Minimum confirmed input replicas, at least 2 |
+| `--snapshot-copies N` | 2 | Minimum confirmed input replicas: at least 1 for simple pools, 2 for etcd |
 | `--failback-seconds S` | 30 | Finite nonnegative stability grace before preferred-master handback |
 | `--failover-after-seconds S` | 3600 | Node-loss timeout; 0 disables this trigger |
 | `--failover-when-idle` / `--no-failover-when-idle` | enabled | Retry when other runnable work drains |
@@ -73,7 +76,7 @@ gpus and doctor. Ordinary init is not a pool command; use cluster init. IDs refe
 | retry | Terminal jobs only; retains learning unless --memory recalibrates it; --reset-attempts resets the OOM attempt budget |
 | priority | Updates shared priority; no preemption |
 
-Global policy in etcd takes precedence over local scheduling mode/caps; per-node resource checks remain.
+Global policy in the control store takes precedence over local scheduling mode/caps; per-node resource checks remain.
 Cluster SSH options belong in named profiles, not global SSH overrides. `--state-dir` does not relocate
 cluster work_dir. No existing queue history is imported. See the guide for failures, data and checkpoint limits.
 
@@ -376,6 +379,7 @@ poll_seconds = 10
 scheduling_mode = "fair"
 max_running_jobs = 0
 default_project_limit = 1
+default_queue = "local"
 default_reserve_mb = 1024
 default_stable_samples = 3
 auto_probe_hold_seconds = 300
@@ -393,6 +397,7 @@ notify_command = ["notify-send", "{title}", "{message}"]
 |---|---|
 | `scheduling_mode` | fair; fifo restores priority/ID ordering |
 | `max_running_jobs` | 0, unlimited total concurrency; counts jobs, not GPUs |
+| `default_queue` | local; cluster routes ordinary queue commands; explicit --local/--remote/--cluster wins |
 | `default_project_limit` | 1; initializes ordinary-job caps for new projects only |
 
 `notify_command` is an argument array, not a shell string. It may interpolate

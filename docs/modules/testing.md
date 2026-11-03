@@ -16,11 +16,14 @@ pytest 验证队列契约，全部自动测试应能在没有物理 GPU 的 Linu
 用临时目录/随机 loopback 端口启动三个真实成员，验证宿主失联、旧任期拒绝、回归和丢失多数派。
 未设置该变量时跳过，不能把跳过当作集群故障测试通过。
 
+新增 [tests/test_pool_store.py](../../tests/test_pool_store.py) 使用临时 SQLite、假 SSH 真实进程和虚拟 GPU 验证简单池。
+
 ## 接口与数据
 
 | 文件 | 覆盖内容 / 修改入口 |
 |---|---|
 | conftest.py | 临时 Settings/QueueDB；submit_job 工厂，默认 fixed=4000MB+1000MB reserve、stable=2、notify=False |
+| test_pool_store.py | 单主 CAS/租约/回滚、真实 SSH RPC 子进程、默认路由/覆盖、本地双卡与两节点分散、无接管、配置兼容 |
 | test_cluster.py | 全局项目/总上限、选主/回切、失联占用、幂等执行、跨节点预算、多卡不跨机、取消、空闲/超时重排/预算/旧执行取消与结果隔离、假 SSH 输入复制/缓存/命名空间 |
 | test_cluster_etcd.py | 可选真实三成员 etcd、故障接管/回切、旧任期拒绝、租约与多数派丢失、真实事务下失联重排预算和取消优先 |
 | test_cli.py | CLI 版本与 pyproject 包版本一致性、 UTC 存储与 show/list 文本与 JSON 本地时区显示及原记录不变、参数别名、默认 auto、提交/JSON、init、TTY 分页、日志 tail/follow 和 Ctrl-C |

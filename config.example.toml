@@ -1,5 +1,6 @@
 [gpuq]
 # Project admission: fair (default) or legacy fifo. Counts tasks, not GPUs.
+default_queue = "local"  # cluster makes ordinary submit/list/daemon use the configured pool
 scheduling_mode = "fair"
 max_running_jobs = 0  # 0 = no total cap; use 2 for A+B across competing projects
 default_project_limit = 1  # initial ordinary-task cap for new projects
@@ -25,8 +26,14 @@ nvidia_smi = "nvidia-smi"
 # state_dir = "~/.local/state/gpuq"
 # cwd = "/srv/project"  # --no-sync only
 
-# Optional shared pool. See docs/cluster_usage.md / .en.md for three-member etcd setup.
+# Optional shared pool. Simple SQLite+SSH: docs/pool_usage.md / .en.md. HA: docs/cluster_usage.md.
+# Set [gpuq].default_queue="cluster" for automatic pool routing.
+# For a simple master use backend="sqlite" and omit endpoints/TLS; workers use backend="ssh"
+# with coordinator="master_profile" pointing back to the master via [remotes.master_profile].
 # [cluster]
+# backend = "etcd"  # sqlite (simple master), ssh (simple worker), or etcd
+# coordinator = "master_profile"  # only for ssh workers
+# gpu_allowlist = [0, 1]  # optional contributed GPUs; empty array = controller only
 # node_id = "a"  # default hostname; unique, persistent identity
 # namespace = "training"  # default "default"; identical on all pool nodes
 # endpoints = ["https://a.internal:2379", "https://b.internal:2379", "https://w.internal:2379"]
@@ -42,7 +49,7 @@ nvidia_smi = "nvidia-smi"
 # a = "local"
 # b = "train"  # SSH profile above; remote cluster.node_id must be b
 # Global policy is initialized once with gpuq cluster init, not from [gpuq] caps.
-# Node-loss retry policy is also set by cluster init (persisted in etcd):
+# Node-loss retry policy is also set by cluster init (persisted in the SQLite master or etcd):
 # --failover-after-seconds 3600 --failover-when-idle --max-failover-retries 1
 # At-least-once: a disconnected old training process may still run.
 # Set --max-failover-retries 0 at initialization if duplicates are unacceptable.

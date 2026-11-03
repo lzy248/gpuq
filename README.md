@@ -42,8 +42,8 @@ Use it on a workstation, through SSH on a remote server, or across a shared pool
   and scheduler restarts. Inspect the queue interactively or use JSON output in scripts.
 - **Remote workspaces.** Submit and manage jobs over SSH, upload only changed content, and reuse
   Python environments and model caches on each node.
-- **Shared GPU pool.** Optionally schedule across local and remote machines, with master election,
-  standby takeover, preferred-master failback, and configurable retries for disconnected jobs.
+- **Shared GPU pool.** Persist local/remote nodes and spread tasks across available GPUs. The new simple
+  pool uses SQLite and SSH; optional high-availability mode adds master failover.
 
 - **Agent skill.** Let your coding agent submit and inspect jobs through conversation; see [installation and examples](#agent-skill).
 
@@ -205,9 +205,10 @@ gpuq --cluster list
 gpuq --cluster logs -f 1
 ```
 
-The pool uses three etcd voting members for coordination; the third can be a small witness host without
-a GPU. Each job runs on one machine. Node-loss retries are configurable and may overlap with an old
-execution during a network partition; see the guide for retry settings and checkpoint handling.
+For a lightweight setup, use the [SQLite + SSH pool](docs/pool_usage.en.md): persist local/remote nodes in
+TOML and set `default_queue = "cluster"`. Then ordinary `gpuq submit` automatically spreads work across
+eligible GPUs, preferring cards with fewer pool tasks. Each job stays on one host. This source-only addition
+needs no etcd or witness; master downtime pauses new dispatch. Optional etcd mode provides master failover.
 
 ## Common commands
 
@@ -308,6 +309,7 @@ welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues should follow
 - [CLI reference](docs/cli_reference.en.md) · [中文](docs/cli_reference.md)
 - [Scheduling guide](docs/scheduling.en.md) · [中文](docs/scheduling.md)
 - [Remote workspaces and environments](docs/remote_usage.en.md) · [中文](docs/remote_usage.md)
+- [Simple GPU pool configuration](docs/pool_usage.en.md) · [中文](docs/pool_usage.md)
 - [Shared pool setup and failover](docs/cluster_usage.en.md) · [中文](docs/cluster_usage.md)
 - [Changelog](CHANGELOG.md)
 

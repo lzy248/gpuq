@@ -37,7 +37,7 @@
 - **持久任务管理。** 保存任务状态、依赖、日志和通知，终端关闭或调度器重启后继续管理；
   支持交互式列表和便于脚本处理的 JSON 输出。
 - **远程工作区。** 通过 SSH 提交和管理任务，增量同步代码，复用各节点的 Python 环境与模型缓存。
-- **统一 GPU 池。** 可选跨主机调度，支持主节点选举、备节点接管、原主回切和可配置的失联任务重排。
+- **统一 GPU 池。** 持久配置本地/远程节点，自动向空闲卡分散任务。新增简单池无需 etcd；可选高可用模式支持主备切换。
 
 - **Agent 技能。** 在对话中让 coding agent 提交和查看任务，见[安装与使用示例](#agent-使用技能)。
 
@@ -191,9 +191,10 @@ gpuq --cluster list
 gpuq --cluster logs -f 1
 ```
 
-统一池由三个 etcd 投票成员协调，第三个可部署在不带 GPU 的轻量见证主机上。
-每个任务在一台机器上运行。失联重排策略可配置；网络分区时新旧执行可能重叠，
-重排参数和 checkpoint 处理方式见集群手册。
+轻量使用可选 [SQLite + SSH 简单池](docs/pool_usage.md)：在 TOML 中保存本地/远程节点并设置
+`default_queue = "cluster"`，之后直接 `gpuq submit`，自动优先分配到池内任务较少的合格 GPU。
+每个任务仍在一台主机运行。此新增功能目前使用源码安装，无需 etcd 或见证节点；主机离线暂停新派发。
+需要主备切换时再选 etcd 模式。
 
 ## 常用命令
 
@@ -287,6 +288,7 @@ pytest
 - [CLI 参数手册](docs/cli_reference.md) · [English](docs/cli_reference.en.md)
 - [调度说明](docs/scheduling.md) · [English](docs/scheduling.en.md)
 - [远程工作区与环境](docs/remote_usage.md) · [English](docs/remote_usage.en.md)
+- [简单 GPU 池配置](docs/pool_usage.md) · [English](docs/pool_usage.en.md)
 - [统一 GPU 池与主备切换](docs/cluster_usage.md) · [English](docs/cluster_usage.en.md)
 - [变更日志](CHANGELOG.md)
 

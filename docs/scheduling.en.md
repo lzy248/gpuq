@@ -194,7 +194,9 @@ to ceil(N/competing projects). A alone with project cap 2 and total cap 2 can ru
 A later B waits for the next free slot without stopping A. Resource-blocked projects retain their share, potentially
 leaving capacity idle; dependency-blocked projects do not participate. Ordinary-mode fairness is per queue; --cluster applies admission across the shared pool, not other users.
 Assigned/starting/running executions count toward global caps, including disconnected nodes until bounded idle/timeout replacement (duplicates possible). OOM retries
-re-enter global admission; local resource checks still apply. See [cluster scheduling](cluster_usage.en.md).
+re-enter global admission; local resource checks still apply. Pool placement prefers fewer tasks per eligible GPU, including assigned
+but not yet started work, before utilization. It never spreads a multi-GPU task across hosts or forces an
+infeasible placement. See [simple pool configuration](pool_usage.en.md). See [cluster scheduling](cluster_usage.en.md).
 
 scheduling_mode="fifo" / daemon --scheduling fifo restores priority/ID order and ignores project caps, but keeps
 the total cap. `projects --json` shows caps, active/pending counts and last admission turns.

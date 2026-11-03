@@ -4,6 +4,11 @@ All notable changes are recorded here. / 所有重要变更记录于此。
 
 ## Unreleased
 
+- Add a SQLite + SSH single-master GPU pool without etcd/witness, persistent node/GPU configuration,
+  default_queue routing with --local override, and placement by active task count per GPU.
+- 新增无需 etcd/见证的 SQLite + SSH 单主 GPU 池、持久节点/贡献卡配置、default_queue 默认路由和
+  --local 覆盖，并优先向池内任务较少的卡分散任务；主机离线暂停新派发。
+
 - Add a portable gpuq agent skill for local, SSH and shared-pool operations, with installation instructions.
 - 新增可独立安装的 gpuq 操作技能，覆盖本地、SSH、统一池和故障处理，附双语安装入口。
 

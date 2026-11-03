@@ -1,4 +1,4 @@
-"""Optional quorum-backed global queue, elected scheduler and persistent node worker."""
+"""Shared GPU queue with a fixed SQLite/SSH master or optional etcd election."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields, replace
@@ -44,20 +44,46 @@ class ClusterConfig:
     cert: str | None = None
     key: str | None = None
     token: str | None = None
+    backend: str = "etcd"
+    coordinator: str | None = None
+    config_path: Path | None = None
+    gpu_allowlist: tuple[int, ...] | None = None
 
-    def store(self) -> EtcdStore:
+    def store(self):
+        if self.backend == "sqlite":
+            from .pool_store import SQLiteStore
+            return SQLiteStore(self.work_dir / "control.sqlite3")
+        if self.backend == "ssh":
+            from .pool_store import SSHStore
+            from .cluster_transfer import profile_for
+            return SSHStore(profile_for(self.coordinator, self.config_path), self.namespace)
         return EtcdStore(list(self.endpoints), f"/gpuq/{self.namespace}",
                          ca=self.ca, cert=self.cert, key=self.key, token=self.token)
 
 
 def load_cluster(settings: Settings) -> ClusterConfig:
-    """Read node-local connection/runtime settings; cluster policy lives in etcd."""
+    """Read persistent pool topology; endpoints retain legacy etcd mode, otherwise SQLite.
+
+    SSH workers point coordinator at a profile for the sole master's configuration.
+    gpu_allowlist restricts this node's contribution, not other applications' GPUs.
+    """
     path = settings.config_path or default_config_path()
     with path.open("rb") as source:
         values = tomllib.load(source).get("cluster", {})
     endpoints = values.get("endpoints", [])
-    if not isinstance(endpoints, list) or not endpoints or not all(isinstance(e, str) for e in endpoints):
+    backend = values.get("backend", "etcd" if endpoints else "sqlite")
+    if backend not in {"sqlite", "ssh", "etcd"}:
+        raise ValueError("cluster backend must be sqlite, ssh or etcd")
+    if backend == "etcd" and (not isinstance(endpoints, list) or not endpoints or not all(isinstance(e, str) for e in endpoints)):
         raise ValueError("configure [cluster].endpoints with etcd client URLs first")
+    if backend != "etcd" and endpoints:
+        raise ValueError("endpoints only apply to the etcd backend")
+    coordinator = values.get("coordinator")
+    if backend == "ssh" and (not isinstance(coordinator, str) or not coordinator):
+        raise ValueError("SSH pool workers require a coordinator profile")
+    allowlist = values.get("gpu_allowlist")
+    if allowlist is not None and (not isinstance(allowlist, list) or any(type(g) is not int or g < 0 for g in allowlist)):
+        raise ValueError("cluster.gpu_allowlist must contain nonnegative GPU indices")
     node = values.get("node_id", socket.gethostname())
     namespace = values.get("namespace", "default")
     if not all(isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", v) for v in (node, namespace)):
@@ -77,6 +103,7 @@ def load_cluster(settings: Settings) -> ClusterConfig:
         nodes, ttl, str(values.get("python", "python3")), values.get("requirements"),
         *(str(Path(values[k]).expanduser()) if values.get(k) else None for k in ("ca", "cert", "key")),
         values.get("token"),
+        backend, coordinator, path, tuple(sorted(set(allowlist))) if allowlist is not None else None,
     )
 
 
@@ -100,6 +127,18 @@ def project_key(project: str) -> str:
     return "projects/" + hashlib.sha256(project.encode()).hexdigest()
 
 
+def gpu_loads(records, node):
+    """Count assigned and accepted pool tasks per physical GPU, including startup."""
+    counts = {}
+    for record in records.values():
+        value = record.value
+        if value["node"] == node and value["job"]["status"] in ACTIVE:
+            for gpu in value["job"]["assigned_gpus"]:
+                key = str(gpu)
+                counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 class ClusterQueue:
     """Canonical queue operations; no SQLite replication or physical process control."""
 
@@ -114,17 +153,19 @@ class ClusterQueue:
 
     def initialize(self, preferred: str, *, limit: int, mode: str, copies: int, failback: float,
                    failover_after: float = 3600, failover_when_idle: bool = True,
-                   failover_retries: int = 1) -> None:
-        if self.store.members() < 3:
+                   failover_retries: int = 1, default_project_limit: int = 1) -> None:
+        single_master = getattr(self.store, "single_master", False)
+        if not single_master and self.store.members() < 3:
             raise ValueError("safe automatic takeover requires at least three voting etcd members")
-        if limit < 0 or copies < 2 or not math.isfinite(failback) or failback < 0 or mode not in {"fair", "fifo"}:
-            raise ValueError("invalid cluster policy; snapshot copies must be at least two")
-        if not math.isfinite(failover_after) or failover_after < 0 or failover_retries < 0:
+        if limit < 0 or copies < (1 if single_master else 2) or not math.isfinite(failback) or failback < 0 or mode not in {"fair", "fifo"}:
+            raise ValueError("invalid cluster policy or insufficient snapshot copies")
+        if not math.isfinite(failover_after) or failover_after < 0 or failover_retries < 0 or default_project_limit < 1:
             raise ValueError("failover timeout and retry limit must be nonnegative and finite")
         policy = {"preferred_node": preferred, "max_running_jobs": limit, "scheduling_mode": mode,
-                  "snapshot_copies": copies, "failback_seconds": failback, "default_project_limit": 1,
+                  "snapshot_copies": copies, "failback_seconds": failback, "default_project_limit": default_project_limit,
                   "failover_after_seconds": failover_after, "failover_when_idle": failover_when_idle,
                   "max_failover_retries": failover_retries}
+        policy["single_master"] = single_master
         if not self.store.txn({"config": None, "counter": None}, {"config": policy, "counter": {"value": 0}}):
             raise ValueError("cluster already initialized; existing policy was not overwritten")
 
@@ -142,7 +183,8 @@ class ClusterQueue:
             counter = self.store.get("counter")
             pk = project_key(job.project_id)
             project = self.store.get(pk)
-            policy = dict(project.value) if project else {"project_id": job.project_id, "limit": 1, "turn": 0}
+            policy = dict(project.value) if project else {"project_id": job.project_id,
+                                                        "limit": config.value.get("default_project_limit", 1), "turn": 0}
             if project_limit is not None:
                 policy["limit"] = project_limit
             job_id = counter.value["value"] + 1
@@ -203,10 +245,16 @@ class ClusterQueue:
                 offer = node.value.get("offers", {}).get(str(job.id))
                 if (node.value["node"] in old.value["eligible_nodes"] and offer
                         and offer["revision"] == old.revision):
-                    candidates.append((node.value.get("active", 0), offer["utilization"], nk, node, offer))
+                    loads = gpu_loads(records, node.value["node"])
+                    if offer.get("gpu_loads", loads) != loads:
+                        continue  # Refresh device selection after any other pool assignment.
+                    count = max(loads.get(str(g), 0) for g in offer["gpus"])
+                    node_active = sum(r.value["node"] == node.value["node"] and r.value["job"]["status"] in ACTIVE
+                                      for r in records.values())
+                    candidates.append((count, node_active, offer["utilization"], nk, node, offer))
             if not candidates:
                 continue
-            _, _, nk, node, offer = min(candidates, key=lambda item: item[:3])
+            _, _, _, nk, node, offer = min(candidates, key=lambda item: item[:4])
             pk = project_key(job.project_id)
             project = projects[pk]
             # etcd revision is a persistent, strictly ordered admission turn.
@@ -361,6 +409,9 @@ class ClusterAgent:
         error = None
         try:
             states = self.scheduler.backend.sample()
+            if self.config.gpu_allowlist is not None:
+                states = [state for state in states if state.index in self.config.gpu_allowlist]
+            loads = gpu_loads(records, self.config.node_id)
             candidates = [as_job(r.value["job"]) for r in records.values()
                           if r.value["job"]["status"] in PENDING and not r.value["job"]["cancel_requested"]
                           and self.config.node_id in r.value["eligible_nodes"]
@@ -371,10 +422,10 @@ class ClusterAgent:
             active = [as_job(r.value["job"]) for r in records.values() if r.value["job"]["status"] in ACTIVE]
             candidates = order_project_jobs(candidates, active, projects, replace(
                 self.settings, scheduling_mode=policy["scheduling_mode"], max_running_jobs=policy["max_running_jobs"]))
-            for decision in self.offers.decisions(candidates, states)[:256]:
+            for decision in self.offers.decisions(candidates, states, gpu_loads=loads)[:256]:
                 record = records[job_key(decision.job_id)]
                 offers[str(decision.job_id)] = {"revision": record.revision, "gpus": decision.gpu_indices,
-                                                "utilization": decision.utilization_percent}
+                                                "utilization": decision.utilization_percent, "gpu_loads": loads}
         except (OSError, subprocess.SubprocessError) as exc:
             error = type(exc).__name__
         node = {"node": self.config.node_id, "session": self.session, "lease": self.lease,
@@ -383,9 +434,11 @@ class ClusterAgent:
         self.store.txn({}, {self.node_key: node}, leases={self.node_key: self.lease})
 
     def election(self) -> Record | None:
-        """Elect via etcd CAS, or hand back to the synchronized preferred node after grace."""
+        """Claim the fixed master lease, or elect/fail back when using an etcd quorum."""
         config = self.queue.policy()
         leader = self.store.get("leader")
+        if config.value.get("single_master") and self.config.node_id != config.value["preferred_node"]:
+            return leader
         preferred_key = "nodes/" + config.value["preferred_node"]
         preferred = self.store.get(preferred_key)
         own = {"node": self.config.node_id, "token": self.session}
@@ -526,6 +579,8 @@ class ClusterAgent:
             for field in ("status", "memory_mb", "memory_mode", "oom_count", "peak_memory_mb", "exit_code",
                           "error", "failure_kind", "started_at", "finished_at", "assigned_gpu", "assigned_gpus"):
                 reported["job"][field] = local.as_dict()[field]
+            if local.status in {"queued", "waiting_memory"}:
+                reported["job"].update(assigned_gpu=spec["assigned_gpu"], assigned_gpus=spec["assigned_gpus"])
             reported["job"].update(status=status, attempt=value["attempt_base"] + local.attempt, updated_at=utcnow())
             reported["runtime"] = local.as_dict()
             # Read the latest revision before launching: cancellation/updates must not be overwritten.
@@ -681,7 +736,7 @@ def submit_cluster(args, settings: Settings, config: ClusterConfig, queue: Clust
 
 
 def dispatch(args) -> int:
-    """Route explicit --cluster commands to one authoritative global queue."""
+    """Route explicit/default pool commands to one authoritative shared queue."""
     from .cli import _display_timestamp, _job_display_dict, _job_line
     from .cluster_transfer import call, profile_for, read_log
     from .config import load_settings
@@ -694,16 +749,22 @@ def dispatch(args) -> int:
     queue = ClusterQueue(config.store())
     if args.subcommand == "cluster":
         if args.cluster_command == "init":
+            if config.backend == "ssh":
+                raise ValueError("initialize a simple pool on its SQLite master")
+            if config.backend == "sqlite" and args.preferred_node not in {None, config.node_id}:
+                raise ValueError("a SQLite pool's master must be the initializing node")
             queue.initialize(args.preferred_node or config.node_id, limit=args.max_running_jobs,
                              mode=args.scheduling_mode, copies=args.snapshot_copies, failback=args.failback_seconds,
                              failover_after=args.failover_after_seconds, failover_when_idle=args.failover_when_idle,
-                             failover_retries=args.max_failover_retries)
+                             failover_retries=args.max_failover_retries,
+                             default_project_limit=settings.default_project_limit)
             print(f"initialized cluster {config.namespace}; preferred master: {args.preferred_node or config.node_id}")
             if args.max_failover_retries:
                 print("node-loss retries enabled: old and replacement training may overlap until reconnection")
         else:
             leader = queue.store.get("leader")
             print(json.dumps({"leader": leader.value if leader else None,
+                              "backend": config.backend,
                               "policy": queue.policy().value,
                               "nodes": [r.value for r in queue.store.scan('nodes/').values()]}, indent=2))
         return 0

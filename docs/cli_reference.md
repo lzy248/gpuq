@@ -1,13 +1,13 @@
 # gpuq CLI 参数手册
 
-本文覆盖 `0.3.0`的公共命令和参数；已有 `0.2.0` 发行包不包含本次新增功能。
+本文覆盖当前源码 CLI。简单池、--local 与 default_queue 为未发布新增功能；v0.3.0 二进制尚不包含这些功能。
 
 ## 全局参数
 
 全局参数必须写在子命令之前：
 
 ```bash
-gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
+gpuq [--local | --cluster | --remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND ...
 ```
 
 | 参数 | 含义 | 默认值 |
@@ -15,7 +15,8 @@ gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND .
 | `--state-dir PATH` | SQLite、锁文件和默认日志目录 | `~/.local/state/gpuq` 或 `GPUQ_STATE_DIR` |
 | `--config PATH` | TOML 配置文件 | `~/.config/gpuq/config.toml` 或 `GPUQ_CONFIG` |
 | `--version` | 显示安装版本后退出 | — |
-| `--cluster` | 使用 etcd 全局池；与 --remote 互斥 | 关闭 |
+| `--local` | 显式独立本地队列，覆盖 default_queue；与 --remote/--cluster 互斥 | 关闭 |
+| `--cluster` | 使用 SQLite/SSH 或 etcd 全局池 | default_queue |
 | `--remote HOST` | SSH 主机/IP/user@host 或本地 profile；后续操作针对远程队列 | 见远程手册 |
 | `--ssh-port N` | 覆盖 SSH 端口 | profile/SSH 默认 |
 | `--ssh-identity PATH` | 本地 SSH 私钥路径 | profile/SSH 默认 |
@@ -29,14 +30,15 @@ gpuq [--cluster | --remote HOST] [--state-dir PATH] [--config PATH] SUBCOMMAND .
 
 ## `gpuq cluster init`
 
-一次性创建全局策略，要求至少三个 etcd 投票成员；不覆盖已有策略。
+一次性创建全局策略：简单池在 SQLite 主机上初始化；etcd 模式才要求至少三名投票成员。不覆盖已有策略。
+初始化捕获主机 [gpuq].default_project_limit 作为新项目上限。简单池配置与默认提交路由见[持久 GPU 池配置](pool_usage.md)。
 
 | 参数 | 默认值 | 含义 |
 |---|---|---|
 | `--preferred-node ID` | 当前 cluster.node_id | 首选主；恢复后交回此节点 |
 | `--max-running-jobs N` | 0 | 全局任务数上限；0 不设上限 |
 | `--scheduling fair\|fifo` | fair | 全局准入模式 |
-| `--snapshot-copies N` | 2 | 提交所需输入确认副本数，至少 2 |
+| `--snapshot-copies N` | 2 | 提交所需输入确认副本数：简单池至少 1，etcd 至少 2 |
 | `--failback-seconds S` | 30 | 回切前稳定秒数；有限非负值 |
 | `--failover-after-seconds S` | 3600 | 失联超时秒数；0 禁用此触发条件 |
 | `--failover-when-idle` / `--no-failover-when-idle` | 开启 | 其他可运行工作清空时重排 |
@@ -70,7 +72,7 @@ gpuq cluster init --max-running-jobs 2 --failback-seconds 30
 | retry | 仅终态；保留学习，--memory 可重校准；--reset-attempts 重置 OOM 尝试预算 |
 | priority | 修改全局优先级，不抢占 |
 
-全局 etcd 策略优先于本机模式/总上限配置；节点资源检查仍生效。SSH 参数放在命名 profile 中，
+全局控制存储策略优先于本机模式/总上限配置；节点资源检查仍生效。SSH 参数放在命名 profile 中，
 不能用全局 SSH 参数覆盖；--state-dir 不改变 cluster.work_dir。不自动导入旧队列，
 失败处理、模型/产物/续训边界见集群手册。
 
@@ -397,6 +399,7 @@ poll_seconds = 10
 scheduling_mode = "fair"
 max_running_jobs = 0
 default_project_limit = 1
+default_queue = "local"
 default_reserve_mb = 1024
 default_stable_samples = 3
 auto_probe_hold_seconds = 300
@@ -415,6 +418,7 @@ notify_command = ["notify-send", "{title}", "{message}"]
 | `poll_seconds` | daemon 采样间隔 |
 | `scheduling_mode` | 默认 fair；fifo 为原优先级/ID 顺序 |
 | `max_running_jobs` | 默认 0 不限总并发；计任务数，不是 GPU 数 |
+| `default_queue` | 默认 local，可设 cluster；显式 --local/--remote/--cluster 优先 |
 | `default_project_limit` | 默认 1；只初始化新项目普通任务并发上限 |
 | `default_reserve_mb` | submit 未指定 reserve 时采用 |
 | `default_stable_samples` | submit 未指定稳定次数时采用 |

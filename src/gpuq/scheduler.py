@@ -295,7 +295,8 @@ class Scheduler:
             )
         return True
 
-    def decisions(self, jobs: list[Job], states: list[GPUState]) -> list[LaunchDecision]:
+    def decisions(self, jobs: list[Job], states: list[GPUState], *, gpu_loads=None) -> list[LaunchDecision]:
+        """Select feasible GPUs; pool offers may prefer lower authoritative task counts."""
         alive_keys: set[tuple[int, int]] = set()
         decisions: list[LaunchDecision] = []
         reservations = self._reservations(states)
@@ -325,7 +326,7 @@ class Scheduler:
             # as a tie-breaker so we do not place new work on an already busy
             # card merely because it has slightly less free memory.
             selected = sorted(
-                eligible, key=lambda row: (row[1], row[0], row[2].index)
+                eligible, key=lambda row: ((gpu_loads or {}).get(str(row[2].index), 0), row[1], row[0], row[2].index)
             )[:job.gpu_count]
             indices = tuple(sorted(row[2].index for row in selected))
             decisions.append(

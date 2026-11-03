@@ -6,21 +6,29 @@
 
 ## 职责与边界
 
-ClusterQueue 通过 [coordination](coordination.md) 保存唯一全局队列；ClusterAgent 同时作为
-候选调度主节点和本机执行节点。当前主机是初始化时默认首选主，恢复后追平再交接。
-三投票成员 etcd 提供多数派持久化；第三成员可不运行 gpuq、不安装 GPU。
+ClusterQueue 通过 [pool-store](pool-store.md) 或 [coordination](coordination.md) 保存唯一全局队列；ClusterAgent 同时作为
+本机执行节点；etcd 模式还作为候选主。简单池只有初始化主机能调度；etcd 模式恢复后可交回首选主。
+可选三投票成员 etcd 提供多数派持久化；第三成员可不运行 gpuq、不安装 GPU。
 不是把不同主机的显存相加，也不把一项多卡任务拆到不同主机。
 
 ## 接口与数据
 
+简单池新增 backend=sqlite（主机）/ssh（worker），无需 etcd；只有初始化主机可派发，主机离线不接管。
+未配置 endpoints 时默认 sqlite，原 endpoints 配置继续默认 etcd。coordinator 为 worker 访问主机的 SSH profile；
+gpu_allowlist 是本节点贡献的物理卡数组（空数组不贡献 GPU）。原状态/重试流程复用。
+初始化从 Settings.default_project_limit 保存新项目默认上限。池内 offer 按全局每卡 active 任务数排序，
+主机比较 offer 的 gpu_loads 与当前分配，变化时等待刷新，避免低利用率启动阶段把任务挤到同一张卡。
+接受后等待本地启动时保留全局分配卡号；本地实际启动仍校验资源。
+
+
 load_cluster(Settings) 读取 [cluster] 的节点私有配置：node_id 默认 hostname，namespace 默认 default，
-endpoints 必填，work_dir 默认 ~/.local/share/gpuq/clusters/<namespace>，lease_seconds 默认 15（至少10），
+endpoints 仅 etcd 模式必填，work_dir 默认 ~/.local/share/gpuq/clusters/<namespace>，lease_seconds 默认 15（至少10），
 python 默认 python3，可选 requirements/ca/cert/key/token；nodes 将节点 ID 映射到 SSH profile 或 local。
-全局策略由 cluster init 创建于 etcd，包含 preferred_node、max_running_jobs=0、scheduling_mode=fair、
-snapshot_copies=2、failback_seconds=30，以及 failover_after_seconds=3600、failover_when_idle=True、
+全局策略由 cluster init 创建于 SQLite 主机或 etcd，包含 preferred_node、max_running_jobs=0、scheduling_mode=fair、
+snapshot_copies=2、failback_seconds=30（仅 etcd 回切使用），以及 failover_after_seconds=3600、failover_when_idle=True、
 max_failover_retries=1。init 不覆盖已有策略；旧策略缺字段按失联重排关闭处理。
 
-etcd 命名空间下 config/counter 保存策略和任务编号；jobs/<ID> 保存 Job 字段、提交参数、输入 manifest、
+控制存储中 config/counter 保存策略和任务编号；jobs/<ID> 保存 Job 字段、提交参数、输入 manifest、
 可用节点、执行历史；projects/<hash> 保存项目限额和持久轮次；registry 保存节点持久存储身份；
 nodes/<ID> 与 leader 绑定租约。Record.revision 用于防止旧状态覆盖新状态。
 
@@ -30,13 +38,13 @@ WorkerDB 限制现有 Scheduler 只启动已获授权的本地任务。节点数
 
 ## 关键流程与不变量
 
-提交先验证本地参数，复制输入到至少两个不同节点，再写全局队列。远端传输见
+提交先验证本地参数，默认复制输入到至少两个不同节点，再写全局队列；简单池可显式设置一份副本。远端传输见
 [cluster-transfer](cluster-transfer.md)；模型仍使用节点缓存，任务输入不进入 etcd。
 节点周期发布实际资源检查产生的 offer；主节点全局排序后指定同一节点的完整 GPU 组和唯一 execution。
 执行节点比较当前 leader 任期与 job revision，将 assigned 原子接受为 starting 后才生成执行记录。
 本地 submission_key=execution 防止重复入队。实际启动仍经过原有稳定采样/二次 GPU 检查。
 
-主节点租约失效后由仍有 quorum 的候选争取 leader。新主只重新授权同一 assigned 执行编号和节点，
+etcd 模式主租约失效后由仍有 quorum 的候选争取 leader；简单池仅固定主可重新取得租约。新主只重新授权同一 assigned 执行编号和节点，
 已有 runner 独立运行，断网结果留在本地。主节点 requeue_lost 在其他在线可运行工作清空或
 失联超时后，可用独立持久预算替换未知执行，属于至少执行一次。默认最多一次；0 关闭。
 原首选节点稳定发布 ready 达 failback_seconds 后，现任主比较双方版本并把 leader 绑定到其租约；
@@ -61,7 +69,7 @@ tick 先核对本地进程/开机时间以避免对重启前旧 PID 发信号，
 
 ## 修改与验证
 
-用户配置、命令、部署和限制见[集群手册](../cluster_usage.md)。
+用户配置、命令、部署和限制见[简单池](../pool_usage.md)及 [etcd 集群手册](../cluster_usage.md)。
 
 失联判断中，在线活跃任务与依赖就绪且有在线副本的 pending 都阻止 idle 条件（包括等待显存），
 没有在线副本或依赖未成功的不阻止。超时不要求 idle；每 tick 最多重新排一项。

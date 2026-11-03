@@ -526,7 +526,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--state-dir", help="覆盖状态目录，默认 ~/.local/state/gpuq")
     parser.add_argument("--config", help="覆盖配置文件，默认 ~/.config/gpuq/config.toml")
-    parser.add_argument("--cluster", action="store_true", help="Use the shared quorum-backed queue")
+    parser.add_argument("--cluster", action="store_true", help="Use the shared GPU pool")
+    parser.add_argument("--local", action="store_true", help="Use the independent local queue, overriding default_queue")
     parser.add_argument("--remote", help="SSH profile, alias, IP or user@host")
     parser.add_argument("--ssh-port", type=int)
     parser.add_argument("--ssh-identity")
@@ -675,7 +676,7 @@ def main(argv: list[str] | None = None) -> None:
     """Route CLI, SSH client or internal SSH server before opening a queue.
 
     Exact internal flags invoke the corresponding SSH protocol. Explicit --cluster
-    routes to the quorum-backed queue; --remote routes to one independent host.
+    or default_queue routes to the shared pool; --local overrides that default; --remote routes to one independent host.
     Neither opens the ordinary local queue; local commands reject sync options.
     Handlers return status codes, but this CLI API raises SystemExit. Expected
     validation/OS/subprocess errors become argparse errors with exit status 2.
@@ -685,13 +686,21 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     try:
-        if argv == ["--gpuq-cluster-call"]:
+        if argv == ["--gpuq-pool-store"]:
+            from .pool_store import serve as serve_pool
+            code = serve_pool()
+        elif argv == ["--gpuq-cluster-call"]:
             from .cluster_transfer import serve as serve_cluster
             code = serve_cluster()
         elif argv == [REMOTE_FLAG]:
             code = serve()
         else:
             args = parser.parse_args(argv)
+            if args.local and (args.cluster or args.remote or args.subcommand == "cluster"):
+                raise ValueError("--local cannot be combined with --cluster, --remote or cluster commands")
+            if not args.local and not args.remote and args.subcommand not in {"init", "cluster"}:
+                args.cluster = args.cluster or load_settings(
+                    state_dir=args.state_dir, config_path=args.config).default_queue == "cluster"
             if args.cluster or args.subcommand == "cluster":
                 if args.remote:
                     raise ValueError("--cluster and --remote are separate modes; configure cluster endpoints/nodes")

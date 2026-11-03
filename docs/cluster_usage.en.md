@@ -1,5 +1,9 @@
 # Shared GPU pool and master failover
 
+This guide describes optional **etcd HA mode**. For a pool with only local/remote GPUs and no witness,
+use the [SQLite + SSH simple pool](pool_usage.en.md). Existing endpoints keep etcd behavior.
+
+
 [简体中文](cluster_usage.md) · [Engineering guide](README.md) · [CLI reference](cli_reference.en.md)
 
 Explicit `--cluster` mode shares one per-user queue across local and remote GPU nodes. The initializing host
@@ -70,6 +74,9 @@ Lock files reuse dependency environments; Python/CUDA/driver compatibility still
 
 | Setting | Default / behavior |
 |---|---|
+| backend | etcd when endpoints exist, otherwise sqlite; ssh for simple-pool workers |
+| coordinator | Required for ssh, master SSH profile |
+| gpu_allowlist | Unset: all local GPUs; array limits contributed cards, empty disables compute |
 | node_id | Hostname; stable unique ID using letters, digits, dot, underscore or hyphen |
 | namespace | default; must match across pool nodes |
 | endpoints | Required nonempty URL array belonging to one etcd cluster |

@@ -12,8 +12,12 @@
 
 ## 接口与数据
 
+新增 [gpuq].default_queue="local"（默认）或 "cluster"：普通命令默认队列。显式 --local/--remote/--cluster
+优先；init 仍是本地初始化，cluster init/status 始终面向池。池拓扑由 cluster.load_cluster 读取。
+
+
 [cluster] 不进入 Settings，由 [cluster.load_cluster](cluster.md) 单独读取；完整字段、默认值和
-优先顺序见[集群配置表](../cluster_usage.md#gpuq-节点配置)。全局模式/总上限来自 etcd init 策略，
+优先顺序见[集群配置表](../cluster_usage.md#gpuq-节点配置)。全局模式/总上限来自控制存储中的 init 策略，
 不使用 [gpuq] 对应值；节点资源阈值仍使用 Settings。节点 work_dir 独立于 state_dir。
 
 
@@ -22,6 +26,7 @@
 
 | 字段 | 默认值 / 单位 |
 |---|---|
+| default_queue | local；可选 cluster，显式 --local/--remote/--cluster 覆盖 |
 | state_dir | `~/.local/state/gpuq` |
 | scheduling_mode | `fair`；可选 `fifo` |
 | max_running_jobs | 0（不设总并发上限）；>=0，所有优先级都受限 |

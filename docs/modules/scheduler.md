@@ -13,6 +13,10 @@
 
 ## 接口与数据
 
+decisions 新增可选 gpu_loads（物理编号字符串→全局任务数），池 offer 优先少任务卡，再利用率/best-fit；
+普通队列不传此映射，原排序不变。显存、稳定和独占仍是前置条件，分散不意味着强制一任务一卡。
+
+
 集群调用共享纯准入排序，FIFO 也显式按 priority DESC/id ASC 排序，不依赖输入顺序。
 节点 WorkerDB 仅向 runnable 暴露已接受的 execution；本地资源二次检查仍生效。
 全局占用与重试授权由[cluster](cluster.md)负责，本地自动 orphan 重排在集群中关闭。
@@ -47,6 +51,8 @@ order_projects(jobs) 输入为 DB.runnable 已处理依赖后的候选，返回�
 修改顺序/限额需跑 tests/test_projects.py；后台生命周期还需
  tests/test_environment.py 和 tests/test_remote.py 中的脱离 SSH、锁复用用例。
 项目公平不替代原有首次/二次 GPU 检查，不能将正优先级解释为绕过物理约束。
+
+后台独立 daemon 显式携带 --local，防止 default_queue=cluster 将本地/SSH 队列后台启动误路由到池。
 
 ## 关键流程与不变量
 

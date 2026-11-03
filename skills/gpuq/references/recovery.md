@@ -35,7 +35,8 @@ delete queue files, or clear execution identity.
 
 Cancel via `gpuq cancel ID`; default --force-after is 10 seconds. In a cluster, an active cancellation
 awaits the node's acknowledgement, so a lost node can retain capacity. Check current job and history
-before saying cancellation completed. For cluster failover, consult [Shared pool](cluster.md).
+before saying cancellation completed. In a simple pool, only the original SQLite master resumes dispatch; workers do not elect a replacement master.
+For cluster failover, consult [Shared pool](cluster.md).
 
 Treat transient SSH/etcd failures as ambiguous results. Re-read the selected queue when reachable;
 never blindly repeat submit. Report the last confirmed state and outstanding uncertainty if reconnecting

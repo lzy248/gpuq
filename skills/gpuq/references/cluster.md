@@ -8,14 +8,23 @@ Use `gpuq --config /path/client.toml cluster status` and the matching --cluster 
 commands. Ordinary --remote queues are independent, not automatically part of the pool. Do not initialize
 or deploy a cluster simply to satisfy a request to submit into an existing one.
 
-A pool needs three independent etcd voting members. The witness is a durable etcd member with full queue
+Two backends exist: newer source supports a fixed SQLite master with SSH workers, without etcd or a witness;
+0.3.0 only supports etcd mode. For simple pools set backend="sqlite" on the master and backend="ssh",
+coordinator="master_profile" on each worker. Worker-to-master SSH is required as well as input transfer
+from submitter to workers. Only the fixed master dispatches; its downtime pauses new assignments while
+training continues. Contributed GPU indices are configured by cluster.gpu_allowlist on each node.
+[Simple pool setup](https://github.com/lzy248/gpuq/blob/main/docs/pool_usage.en.md) includes complete TOML examples.
+Set [gpuq].default_queue="cluster" for ordinary submit/list/daemon routing; --local selects the independent queue.
+Pool offers prefer fewer active tasks per GPU, subject to resource checks/project caps; newly assigned jobs count.
+
+Optional HA mode needs three independent etcd voting members. The witness is a durable etcd member with full queue
 metadata; it needs no GPU agent or model cache. GPU nodes run `gpuq --cluster daemon`. Namespace/endpoints
 must match; node IDs must be unique and remain bound to their persistent work_dir journal. Do not delete
 identity.json or reuse a node ID with empty storage to bypass registration failures.
 
 --cluster and --remote cannot be combined. [cluster.nodes] maps node IDs to SSH profiles or local for input
 replication/log retrieval. Each node's [cluster].python/requirements controls its training environment.
-Normal --state-dir does not move cluster.work_dir. Shared admission policy is initialized in etcd;
+Normal --state-dir does not move cluster.work_dir. Shared admission policy is initialized in the master SQLite store or etcd;
 --cluster daemon rejects local mode/total-cap overrides. gpuqd's default entry point is a local daemon,
 so use the explicit gpuq --cluster daemon form for agents.
 
@@ -46,7 +55,7 @@ failover_count and lost_since; logs reads the current execution, not a selectabl
 
 ## Elections and retry policy
 
-Lease/quorum protection elects a scheduler. The initializing host is preferred by default; after it
+In etcd mode, lease/quorum protection elects a scheduler. Simple pools have only a fixed master. The initializing host is preferred by default; after it
 returns and remains ready for the configured grace (default 30 seconds), leadership transfers back.
 Missing quorum prevents new authorization; previously accepted work and independent runners can continue.
 Never force a new master by editing etcd records or the local SQLite queue during ordinary recovery.

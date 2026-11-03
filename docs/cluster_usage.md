@@ -1,5 +1,9 @@
 # 统一 GPU 池与主备切换
 
+本页介绍可选的 **etcd 高可用模式**。只需要本地/远程统一调度且不要见证时，
+使用 [SQLite + SSH 简单 GPU 池](pool_usage.md)。原有 endpoints 配置保持 etcd 模式。
+
+
 [English](cluster_usage.en.md) · [工程总览](README.md) · [CLI 参数](cli_reference.md)
 
 `--cluster` 是显式开启的全局队列：同一用户的本地和远程节点共同提供 GPU，
@@ -70,6 +74,9 @@ B 使用相同 namespace/endpoints，node_id 改为 b。若也从 B 提交，配
 
 | 配置 | 默认值 / 行为 |
 |---|---|
+| backend | 有 endpoints 默认 etcd，否则 sqlite；简单池 worker 使用 ssh |
+| coordinator | ssh 模式必填，访问主机的 SSH profile |
+| gpu_allowlist | 未设置贡献全部本机卡；数组限定物理编号，空数组不执行训练 |
 | node_id | 主机名；固定唯一，限定字母、数字、点、下划线和连字符 |
 | namespace | default；所有节点一致，不同值隔离队列 |
 | endpoints | 必填非空 URL 数组；必须属于同一 etcd 集群 |

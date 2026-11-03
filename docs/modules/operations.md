@@ -14,10 +14,10 @@
 当前源码/包版本为 0.3.0，发布说明见 [v0.3.0](../../.github/release-notes/v0.3.0.md)。
 README 二进制下载示例为 0.3.0，与当前包版本一致。
 
-可选集群需部署三个独立 etcd v3 投票成员，见[中文部署](../cluster_usage.md) /
+[简单池](../pool_usage.md) 使用 SQLite + SSH，无额外服务；可选 HA 集群才需部署三个独立 etcd v3 投票成员，见[中文部署](../cluster_usage.md) /
 [English](../cluster_usage.en.md)。A/B 运行 gpuq agent，见证仅运行 etcd。服务 ExecStart 使用
 `gpuq --config /path/config.toml --cluster daemon`，保持 KillMode=process；原服务不自动替换。
-备份 etcd 和各节点 work_dir，维护成员/TLS/权限；不要用独立 daemon 同时调度相同 GPU。
+备份主机 SQLite 控制库或 etcd，以及各节点 work_dir，维护成员/TLS/权限；不要用独立 daemon 同时调度相同 GPU。
 
 
 源码发行清单：[MANIFEST.in](../../MANIFEST.in)。

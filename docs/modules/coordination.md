@@ -12,6 +12,9 @@ EtcdStore 封装 etcd v3 JSON gateway 的线性一致读取、CAS 事务、租�
 
 ## 接口与数据
 
+简单单主模式通过 [pool-store](pool-store.md) 实现同接口，不调用 etcd；EtcdStore 本身行为不变。
+
+
 Record(value, revision) 保存 JSON 对象和 mod_revision。get 返回 Record 或 None；scan 返回
 前缀范围内的记录。txn(checks, puts, deletes, leases) 用 MOD revision 做原子比较更新，返回 bool。
 每条 JSON 记录最多 1 MiB，单次响应最多 16 MiB；任务大文件不应写入 etcd。

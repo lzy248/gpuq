@@ -81,7 +81,8 @@
         "tests/test_remote.py",
         "tests/test_environment.py",
         "tests/test_cluster.py",
-        "tests/test_cluster_etcd.py"
+        "tests/test_cluster_etcd.py",
+        "tests/test_pool_store.py"
       ]
     },
     {
@@ -160,6 +161,12 @@
         "skills/gpuq/references/remote.md",
         "skills/gpuq/references/cluster.md",
         "skills/gpuq/references/recovery.md"
+      ]
+    },
+    {
+      "doc": "docs/modules/pool-store.md",
+      "files": [
+        "src/gpuq/pool_store.py"
       ]
     }
   ]

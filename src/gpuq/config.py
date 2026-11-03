@@ -32,6 +32,7 @@ class Settings:
     nvidia_smi: str = "nvidia-smi"
     notify_command: tuple[str, ...] | None = None
     config_path: Path | None = None
+    default_queue: str = "local"
 
     @property
     def database_path(self) -> Path:
@@ -96,6 +97,9 @@ def load_settings(
         raise ValueError("auto_probe_hold_seconds must be nonnegative")
     notify = data.get("notify_command")
     scheduling_mode = str(data.get("scheduling_mode", "fair"))
+    default_queue = data.get("default_queue", "local")
+    if default_queue not in {"local", "cluster"}:
+        raise ValueError("default_queue must be local or cluster")
     if scheduling_mode not in {"fair", "fifo"}:
         raise ValueError("scheduling_mode must be fair or fifo")
     notify_command: tuple[str, ...] | None
@@ -106,6 +110,7 @@ def load_settings(
     else:
         notify_command = tuple(str(part) for part in notify)
     return Settings(
+        default_queue=default_queue,
         state_dir=root,
         scheduling_mode=scheduling_mode,
         max_running_jobs=_nonnegative_int(data.get("max_running_jobs", 0), "max_running_jobs"),

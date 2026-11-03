@@ -8,7 +8,7 @@
 
 gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQLite 持久化，
 `nvidia-smi` 发现设备。支持单机单卡/多卡任务、显存学习、依赖和有界失联恢复。
-它提供 SSH 远程 CLI、增量快照及可选 etcd 多数派控制的统一 GPU 池；不是 Slurm 或安全沙盒。
+它提供 SSH 远程 CLI、增量快照及可选 SQLite + SSH 简单池或 etcd 多数派统一池；不是 Slurm 或安全沙盒。
 不同用户的队列互不协调，无法保证外部进程不在启动窗口抢显存。
 
 默认提交是 auto 显存、1 张 GPU；`--gpu 0,1` 限定候选范围，`--gpus 2` 才申请两张。
@@ -21,7 +21,9 @@ gpuq 是 Linux 上面向单个用户的机会式 GPU 队列，Python 3.10+，SQL
 flowchart LR
   CLI[cli: submit / inspect / cancel] --> DB[(SQLite jobs)]
   CLI --> Pool[cluster: explicit shared queue]
-  Pool <--> Etcd[(three-member etcd quorum)]
+  Pool <--> Single[(SQLite master via SSH)]
+  Single <--> Agent
+  Pool <--> Etcd[(optional three-member etcd quorum)]
   Etcd <--> Agent[cluster agents + leased master]
   Agent --> Inputs[replicated input snapshots]
   Agent --> LocalJournal[(node execution journal)]
@@ -49,8 +51,8 @@ flowchart LR
 1. 本地 CLI 验证参数后把 `Job` 写入本地 DB。指定 --remote 时先走 SSH，远程默认按内容增量
    接收代码、创建独立快照并准备可选环境，最后由远程 CLI 写远程 DB；查询/管理不经过同步。
    远程队列使用同一套 scheduler/runner 链路，提交本身不启动训练。
-   --cluster 则先复制输入再写 etcd 全局队列，选出的主节点统一准入，节点持久去重后接入本地执行链路；
-   失去多数派停止新授权，已有训练继续。有 quorum 时，失联任务默认在其他可运行工作清空或一小时后
+   --cluster 或 default_queue=cluster 则先复制输入再写全局队列（SQLite 主机或 etcd），选出的主节点统一准入，节点持久去重后接入本地执行链路；
+   简单池主机离线暂停新派发，无需见证；etcd 模式失去多数派停止新授权，已有训练继续。有 quorum 时，失联任务默认在其他可运行工作清空或一小时后
    最多重排一次（可能重复训练）；回归节点取消被替代执行。部署与回切见[集群使用](cluster_usage.md)。
 2. 每个状态目录一个 daemon，通过 `flock` 防止重复实例。每个 tick 最多启动一个任务，
    已启动任务可以并行。先核对失联进程、采样与峰值，再读取依赖满足的任务。
@@ -63,7 +65,7 @@ flowchart LR
 
 ## 状态和数据放在哪里
 
-集群模式的权威元数据在 etcd；节点 work_dir 保存独立 SQLite 执行 journal、输入副本和缓存，
+池模式的权威元数据在主机 control.sqlite3 或 etcd；节点 work_dir 保存独立 SQLite 执行 journal、输入副本和缓存，
 不会复制或合并普通队列 SQLite。见[集群模块](modules/cluster.md)。
 
 默认状态目录 `~/.local/state/gpuq` 内有 `queue.sqlite3`、`logs/`、`gpuqd.lock`；
@@ -94,6 +96,7 @@ flowchart LR
 |---|---|
 | [Agent 操作技能](modules/agent-skill.md) | 面向使用者的 gpuq 技能、安装、队列选择与按需参考 |
 | [入口](modules/entrypoints.md) | `__init__`、`__main__`、打包入口；Python/二进制怎样调用 CLI 与 runner |
+| [简单池存储](modules/pool-store.md) | 单主 SQLite 与持久 SSH RPC，无需 etcd |
 | [全局队列与选主](modules/cluster.md) | 多数派控制面、首选主回归、执行去重与节点隔离 |
 | [集群输入复制](modules/cluster-transfer.md) | 复制输入缓存与读取节点日志；不在传输时提交任务 |
 | [集群一致性适配](modules/coordination.md) | etcd 线性读取、事务、租约与失败隔离 |
@@ -167,6 +170,7 @@ python -m build
 
 ## 其他文档与验收
 
+简单池配置：[中文](pool_usage.md) / [English](pool_usage.en.md)。
 集群部署：[中文](cluster_usage.md) / [English](cluster_usage.en.md)。
 远程使用：[中文](remote_usage.md) / [English](remote_usage.en.md)。
 用户参数：[中文](cli_reference.md) / [English](cli_reference.en.md)。
